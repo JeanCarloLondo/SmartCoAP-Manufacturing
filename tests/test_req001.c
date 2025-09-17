@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "../src/coap.h"
+#include <arpa/inet.h>
 
 /*
  * Simulated server handler:

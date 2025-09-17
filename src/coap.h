@@ -10,7 +10,8 @@
 #define COAP_PAYLOAD_MARKER 0xFF
 
 // Types
-typedef enum {
+typedef enum
+{
     COAP_TYPE_CON = 0,
     COAP_TYPE_NON = 1,
     COAP_TYPE_ACK = 2,
@@ -19,13 +20,14 @@ typedef enum {
 
 // Methods (class 0) and simple mapping (useful helpers)
 #define COAP_METHOD_EMPTY 0
-#define COAP_METHOD_GET   1
-#define COAP_METHOD_POST  2
-#define COAP_METHOD_PUT   3
+#define COAP_METHOD_GET 1
+#define COAP_METHOD_POST 2
+#define COAP_METHOD_PUT 3
 #define COAP_METHOD_DELETE 4
 
 // Parse/Serialize return codes
-typedef enum {
+typedef enum
+{
     COAP_OK = 0,
     COAP_ERR_INVALID = -1,
     COAP_ERR_TRUNCATED = -2,
@@ -35,15 +37,16 @@ typedef enum {
 } coap_status_t;
 
 // CoAP message structure (simplified, no Options)
-typedef struct {
-    uint8_t version;                 // 2 bits used (value 1)
-    coap_type_t type;                // 2 bits
-    uint8_t tkl;                     // token length 0..8
-    uint8_t code;                    // method or response code
-    uint16_t message_id;             // message ID (network order handled in serialize/parse)
-    uint8_t token[COAP_MAX_TOKEN_LEN];// token bytes if tkl>0
-    uint8_t *payload;                // pointer to payload bytes (NULL if none)
-    size_t payload_len;              // length of payload
+typedef struct
+{
+    uint8_t version;                   // 2 bits used (value 1)
+    coap_type_t type;                  // 2 bits
+    uint8_t tkl;                       // token length 0..8
+    uint8_t code;                      // method or response code
+    uint16_t message_id;               // message ID (network order handled in serialize/parse)
+    uint8_t token[COAP_MAX_TOKEN_LEN]; // token bytes if tkl>0
+    uint8_t *payload;                  // pointer to payload bytes (NULL if none)
+    size_t payload_len;                // length of payload
 } coap_message_t;
 
 /*
@@ -80,5 +83,26 @@ void coap_build_rst_for(const coap_message_t *req, coap_message_t *out_rst);
  * Utility to initialize a message to safe defaults.
  */
 void coap_init_message(coap_message_t *msg);
+
+// CoAP Method Codes (class 0)
+#define COAP_CODE_EMPTY 0x00
+#define COAP_CODE_GET 0x01
+#define COAP_CODE_POST 0x02
+#define COAP_CODE_PUT 0x03
+#define COAP_CODE_DELETE 0x04
+
+// CoAP Success Response Codes (class 2)
+#define COAP_CODE_CREATED 0x41 // 2.01
+#define COAP_CODE_DELETED 0x42 // 2.02
+#define COAP_CODE_VALID 0x43   // 2.03
+#define COAP_CODE_CHANGED 0x44 // 2.04
+#define COAP_CODE_CONTENT 0x45 // 2.05
+
+// CoAP Client Error Response Codes (class 4)
+#define COAP_CODE_BAD_REQUEST 0x80 // 4.00
+#define COAP_CODE_NOT_FOUND 0x84   // 4.04
+
+// CoAP Server Error Response Codes (class 5)
+#define COAP_CODE_INTERNAL_ERROR 0xA0 // 5.00
 
 #endif // COAP_H
