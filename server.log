@@ -1998,3 +1998,7 @@ Processed request MID=13330, Code=3
 Processed request MID=13330, Code=1
 Processed request MID=13330, Code=4
 Processed request MID=13330, Code=1
+Server listening on port 5283
+Server listening on port 5683
+Processed request MID=18526, Code=2
+RST sent
