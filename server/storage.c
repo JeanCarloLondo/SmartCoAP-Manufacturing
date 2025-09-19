@@ -104,14 +104,14 @@ char *storage_get(int key)
         {
             if (it->key == key)
             {
-                char *out = strdup(it->value); // duplica la cadena
+                char *out = strdup(it->value); // duplicate for caller
                 pthread_mutex_unlock(&storage_mutex);
-                return out; // caller debe liberar
+                return out; // caller must free
             }
             it = it->next;
         }
         pthread_mutex_unlock(&storage_mutex);
-        return NULL; // no encontrado
+        return NULL; // not founded
     }
     else
     {

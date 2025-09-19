@@ -1,187 +1,151 @@
+// server.c
+#include "coap.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
+#else
 #include <unistd.h>
-#include <pthread.h>
 #include <arpa/inet.h>
-#include "coap.h"
-#include "storage.h"
+#include <sys/socket.h>
+#endif
 
-#define BUF_SIZE 1024
+#define SERVER_PORT 5683
+#define BUFFER_SIZE 1500
 
-typedef struct
+// ========== Simple request handler ==========
+// This function inspects the parsed CoAP message and builds a response.
+static void handle_coap_request(const coap_message_t *req,
+                                struct sockaddr_in *client_addr,
+                                int sockfd)
 {
-    int sock;
-    struct sockaddr_in client_addr;
-    socklen_t addr_len;
-    uint8_t buffer[BUF_SIZE];
-    size_t msg_len;
-    FILE *log_file;
-} client_task_t;
+    coap_message_t resp;
+    coap_init_message(&resp);
+    resp.type = COAP_TYPE_ACK;
+    resp.message_id = req->message_id;
+    resp.code = 69; // 2.05 Content
 
-void *handle_client(void *arg)
-{
-    client_task_t *task = (client_task_t *)arg;
+    const char *payload_str = "Hello from SmartCoAP server!";
+    resp.payload_len = strlen(payload_str);
+    resp.payload = (uint8_t *)malloc(resp.payload_len);
+    if (resp.payload)
+        memcpy(resp.payload, payload_str, resp.payload_len);
 
-    coap_message_t req, resp;
-    memset(&req, 0, sizeof(req));
-    memset(&resp, 0, sizeof(resp));
-
-    if (coap_parse(task->buffer, task->msg_len, &req) != COAP_OK)
-    {
-        // Build RST (reset)
-        resp.version = COAP_VERSION;
-        resp.type = COAP_TYPE_RST;
-        resp.code = 0;
-        resp.message_id = req.message_id;
-        resp.tkl = 0;
-        resp.payload = NULL;
-        resp.payload_len = 0;
-
-        uint8_t out_buf[BUF_SIZE];
-        int len = coap_serialize(&resp, out_buf, sizeof(out_buf));
-        sendto(task->sock, out_buf, len, 0,
-               (struct sockaddr *)&task->client_addr, task->addr_len);
-        fprintf(task->log_file, "RST sent\n");
-        fflush(task->log_file);
-        free(task);
-        return NULL;
-    }
-
-    // Build base response
-    resp.version = COAP_VERSION;
-    resp.message_id = req.message_id;
-    resp.tkl = req.tkl;
-    memcpy(resp.token, req.token, req.tkl);
-
-    if (req.type == COAP_TYPE_CON)
-        resp.type = COAP_TYPE_ACK;
-    else if (req.type == COAP_TYPE_NON)
-        resp.type = COAP_TYPE_NON;
-    else
-        resp.type = COAP_TYPE_RST;
-
-    int key = 1;
-
-    switch (req.code)
-    {
-    case COAP_CODE_GET:
-    {
-        char *value = storage_get(key);
-        if (value != NULL)
-        {
-            resp.code = COAP_CODE_CONTENT;
-            resp.payload = (uint8_t *)value;
-            resp.payload_len = strlen(value);
-        }
-        else
-        {
-            resp.code = COAP_CODE_NOT_FOUND;
-        }
-
-        uint8_t out_buf[BUF_SIZE];
-        int len = coap_serialize(&resp, out_buf, sizeof(out_buf));
-        sendto(task->sock, out_buf, len, 0,
-               (struct sockaddr *)&task->client_addr, task->addr_len);
-
-        if (value)
-            free(value);
-        break;
-    }
-    case COAP_CODE_POST:
-    {
-        storage_add(key, "new_value");
-        resp.code = COAP_CODE_CREATED;
-        break;
-    }
-    case COAP_CODE_PUT:
-    {
-        storage_update(key, "updated_value");
-        resp.code = COAP_CODE_CHANGED;
-        break;
-    }
-    case COAP_CODE_DELETE:
-    {
-        storage_delete(key);
-        resp.code = COAP_CODE_DELETED;
-        break;
-    }
-    default:
-        resp.code = COAP_CODE_BAD_REQUEST;
-    }
-
-    uint8_t out_buf[BUF_SIZE];
+    // Serialize response
+    uint8_t out_buf[BUFFER_SIZE];
     int len = coap_serialize(&resp, out_buf, sizeof(out_buf));
-    sendto(task->sock, out_buf, len, 0,
-           (struct sockaddr *)&task->client_addr, task->addr_len);
+    if (len > 0)
+    {
+        sendto(sockfd, (const char *)out_buf, len, 0,
+               (struct sockaddr *)client_addr, sizeof(*client_addr));
+    }
 
-    fprintf(task->log_file, "Processed request MID=%d, Code=%d\n",
-            req.message_id, req.code);
-    fflush(task->log_file);
-
-    if (req.payload)
-        free(req.payload);
-    free(task);
-    return NULL;
+    coap_free_message(&resp);
 }
 
+// ========== Main server loop ==========
 int main(int argc, char *argv[])
 {
-    if (argc < 3)
+    int port = SERVER_PORT;
+    FILE *logf = stdout; // log file (stdout by default)
+
+    if (argc >= 2)
     {
-        fprintf(stderr, "Usage: %s <PORT> <LogFile>\n", argv[0]);
-        exit(1);
+        port = atoi(argv[1]);
+    }
+    if (argc >= 3)
+    {
+        logf = fopen(argv[2], "a");
+        if (!logf)
+        {
+            perror("fopen log file");
+            return EXIT_FAILURE;
+        }
+        dup2(fileno(logf), STDOUT_FILENO);
+        dup2(fileno(logf), STDERR_FILENO);
+
+        setvbuf(stdout, NULL, _IONBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
     }
 
-    int port = atoi(argv[1]);
-    FILE *log_file = fopen(argv[2], "a");
-    if (!log_file)
+#if defined(_WIN32) || defined(_WIN64)
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
-        perror("Log file");
-        exit(1);
+        fprintf(stderr, "WSAStartup failed\n");
+        return EXIT_FAILURE;
     }
+#endif
 
-    storage_init();
-
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0)
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0)
     {
         perror("socket");
-        exit(1);
+        return EXIT_FAILURE;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(port);
+    struct sockaddr_in servaddr;
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port = htons(port);
 
-    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    if (bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
     {
         perror("bind");
-        exit(1);
+#if defined(_WIN32) || defined(_WIN64)
+        closesocket(sockfd);
+        WSACleanup();
+#else
+        close(sockfd);
+#endif
+        return EXIT_FAILURE;
     }
 
-    fprintf(log_file, "Server listening on port %d\n", port);
-    fflush(log_file);
+    printf("CoAP server listening on port %d...\n", SERVER_PORT);
+
+    uint8_t buffer[BUFFER_SIZE];
+    struct sockaddr_in clientaddr;
+    socklen_t clientlen = sizeof(clientaddr);
 
     while (1)
     {
-        client_task_t *task = malloc(sizeof(client_task_t));
-        task->sock = sock;
-        task->addr_len = sizeof(task->client_addr);
-        task->msg_len = recvfrom(sock, task->buffer, BUF_SIZE, 0,
-                                 (struct sockaddr *)&task->client_addr,
-                                 &task->addr_len);
-        task->log_file = log_file;
+        ssize_t n = recvfrom(sockfd, (char *)buffer, sizeof(buffer), 0,
+                             (struct sockaddr *)&clientaddr, &clientlen);
+        if (n < 0)
+        {
+            perror("recvfrom");
+            continue;
+        }
 
-        pthread_t tid;
-        pthread_create(&tid, NULL, handle_client, task);
-        pthread_detach(tid);
+        coap_message_t req;
+        int ret = coap_parse(buffer, (size_t)n, &req);
+        if (ret != COAP_OK)
+        {
+            fprintf(stderr, "Failed to parse CoAP message (err=%d)\n", ret);
+            continue;
+        }
+
+        printf("Received CoAP message: MID=%u Code=%u Type=%u Options=%zu PayloadLen=%zu\n",
+               req.message_id, req.code, req.type, req.options_count, req.payload_len);
+
+        handle_coap_request(&req, &clientaddr, sockfd);
+
+        coap_free_message(&req);
     }
 
-    close(sock);
-    fclose(log_file);
-    storage_cleanup();
-    return 0;
+#if defined(_WIN32) || defined(_WIN64)
+    closesocket(sockfd);
+    WSACleanup();
+#else
+    close(sockfd);
+#endif
+
+    return EXIT_SUCCESS;
 }

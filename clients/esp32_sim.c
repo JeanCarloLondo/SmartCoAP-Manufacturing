@@ -10,7 +10,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 
-#include "../src/coap.h" // ajustar ruta si fuera necesario
+#include "../src/coap.h" // adjust path as needed
 
 // Parameters
 #define DEFAULT_SERVER_IP "127.0.0.1"
