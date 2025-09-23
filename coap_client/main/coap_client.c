@@ -9,6 +9,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -16,11 +17,10 @@
 
 #include "coap.h"   
 
-
 // ===== CONFIGURACIÓN =====
 #define WIFI_SSID   ""       // ⚠️ Cambia por tu red WiFi
 #define WIFI_PASS   ""
-#define SERVER_IP   "" // ⚠️ Cambia a la IP de tu PC (servidor)
+#define SERVER_IP   ""       // ⚠️ Cambia a la IP de tu PC (servidor)
 #define SERVER_PORT 5683
 #define TAG "CoAP_CLIENT"
 
@@ -31,7 +31,7 @@ static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 // ==========================
 
-//Simulated sensor data (you can replace this with actual sensor reading code)
+//Simulated sensor data (puedes reemplazar luego con código de sensor real)
 static void read_sensor_data(float *temperature, float *humidity) {
     *temperature = 25.0 + (rand() % 100) / 10.0; // Simulated temperature
     *humidity = 50.0 + (rand() % 100) / 10.0;    // Simulated humidity
@@ -100,16 +100,17 @@ static void wifi_init(void) {
 
     ESP_LOGI(TAG, "Conectando a WiFi...");
     
-    EventsBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
             pdFALSE,
             pdFALSE,
             portMAX_DELAY);
+
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Conexión a WiFi exitosa");
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Fallo al conectar a WiFi");
-
+    }
 }
 
 // Tarea principal: enviar datos CoAP
@@ -126,26 +127,27 @@ static void coap_client_task(void *pvParameters) {
         ESP_LOGE(TAG, "Error al crear socket");
         vTaskDelete(NULL);
     }
+
     // Configurar timeout de recepción
     struct timeval timeout;
     timeout.tv_sec = 3;
     timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
     ESP_LOGI(TAG, "Socket creado, iniciando envío de datos...");
     while (1) {
-        // 1. Leer sensor DHT22
+        // 1. Leer sensor simulado
         float temp = 0, hum = 0;
         read_sensor_data(&temp, &hum);
         ESP_LOGI(TAG, "Datos del sensor simulado - Temp: %.2f C, Hum: %.1f %%", temp, hum);
        
-
         // 2. Construir mensaje CoAP
         coap_message_t msg;
         coap_init_message(&msg);
         msg.type = COAP_TYPE_CON;
         msg.code = COAP_CODE_POST;
         msg.message_id = rand() % 65535;
-        msg.tkl=0;
+        msg.tkl = 0;
 
         char payload[64];
         snprintf(payload, sizeof(payload), "temp=%.2f,hum=%.1f", temp, hum);
@@ -159,7 +161,7 @@ static void coap_client_task(void *pvParameters) {
         if (len <= 0) {
             ESP_LOGE(TAG, "Error serializando mensaje CoAP");
             coap_free_message(&msg);
-            vTaskDelay(pdMS_TO_TICKS(5000));
+            vTaskDelay(pdMS_TO_TICKS(10000));
             continue;
         }
 
@@ -204,12 +206,8 @@ static void coap_client_task(void *pvParameters) {
         }
 
         // Esperar 10 segundos antes del próximo envío
-        ESP_LOGI(TAG, "Esperando 10 segundos para proximo envio...\n");
+        ESP_LOGI(TAG, "Esperando 10 segundos para próximo envío...\n");
         vTaskDelay(pdMS_TO_TICKS(10000));
-    }
-
-        // Esperar 5 segundos antes de enviar otro
-        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
     close(sock);
@@ -217,12 +215,9 @@ static void coap_client_task(void *pvParameters) {
 }
 
 void app_main(void) {
-
     srand(time(NULL));
-
     ESP_LOGI(TAG, "Iniciando CoAP Client");
 
     wifi_init();
-
     xTaskCreate(coap_client_task, "coap_client_task", 4096, NULL, 5, NULL);
 }
