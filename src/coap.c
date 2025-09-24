@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <winsock2.h> // htons/ntohs for Windows
@@ -251,4 +252,60 @@ void coap_build_rst_for(const coap_message_t *req, coap_message_t *rst)
     rst->type = COAP_TYPE_RST;
     rst->code = COAP_METHOD_EMPTY;
     rst->message_id = req->message_id;
+}
+
+// Devuelve COAP_OK (0) o un error negativo definido en coap.h
+int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, size_t length)
+{
+    if (!msg)
+        return COAP_ERR_INVALID;
+    if (!value && length > 0)
+        return COAP_ERR_INVALID;
+    // tu serializador actual no soporta opciones con length > 15
+    if (length > 15)
+        return COAP_ERR_OPTION_OVERSIZE;
+
+    // find insertion point to keep options ordered by number
+    size_t idx = 0;
+    for (; idx < msg->options_count; ++idx) {
+        if (msg->options[idx].number > number)
+            break;
+    }
+
+    // realloc options array to hold one more
+    coap_option_t *tmp = (coap_option_t*)realloc(msg->options, (msg->options_count + 1) * sizeof(coap_option_t));
+    if (!tmp)
+        return COAP_ERR_INVALID;
+    msg->options = tmp;
+
+    // shift elements right from the end to idx
+    for (size_t j = msg->options_count; j > idx; --j) {
+        msg->options[j] = msg->options[j - 1];
+    }
+
+    // initialize new slot
+    msg->options[idx].number = number;
+    msg->options[idx].length = (uint16_t)length;
+    msg->options[idx].value = NULL;
+
+    if (length > 0) {
+        msg->options[idx].value = (uint8_t*)malloc(length);
+        if (!msg->options[idx].value) {
+            // rollback: shift back and shrink array
+            for (size_t j = idx; j < msg->options_count; ++j)
+                msg->options[j] = msg->options[j + 1];
+            // reduce size
+            if (msg->options_count == 0) {
+                free(msg->options);
+                msg->options = NULL;
+            } else {
+                coap_option_t *tmp2 = (coap_option_t*)realloc(msg->options, msg->options_count * sizeof(coap_option_t));
+                if (tmp2) msg->options = tmp2;
+            }
+            return COAP_ERR_INVALID;
+        }
+        memcpy(msg->options[idx].value, value, length);
+    }
+    msg->options_count++;
+    return COAP_OK;
 }

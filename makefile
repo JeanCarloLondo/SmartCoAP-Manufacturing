@@ -16,6 +16,9 @@ src/coap.o: src/coap.c src/coap.h
 test_req001: src/coap.o $(TEST)
 	$(CC) $(CFLAGS) src/coap.o $(TEST) -o test_req001
 
+client: src/coap.o tests/client.c
+	$(CC) $(CFLAGS) src/coap.o tests/client.c -o client
+
 run: test_req001
 	./test_req001
 

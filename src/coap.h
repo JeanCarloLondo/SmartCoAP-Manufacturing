@@ -105,6 +105,13 @@ void coap_build_rst_for(const coap_message_t *req, coap_message_t *out_rst);
  */
 void coap_init_message(coap_message_t *msg);
 
+/*
+ * Add an option to a coap_message_t.
+ * The option list is kept ordered by option number (ascending).
+ * Returns COAP_OK (0) on success or a negative coap_status_t on error.
+ */
+int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, size_t length);
+
 // ==========================
 // CoAP Codes
 // ==========================

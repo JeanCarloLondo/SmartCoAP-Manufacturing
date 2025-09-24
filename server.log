@@ -4006,3 +4006,7 @@ Received CoAP message: MID=36197 Code=1 Type=0 Options=0 PayloadLen=0
 Received CoAP message: MID=32321 Code=1 Type=0 Options=0 PayloadLen=0
 Received CoAP message: MID=9982 Code=1 Type=0 Options=0 PayloadLen=0
 Received CoAP message: MID=25953 Code=1 Type=0 Options=0 PayloadLen=0
+Server listening on port 5683
+Processed MID=45298 Code=2 Uri=sensor
+Processed MID=45298 Code=2 Uri=sensor
+Processed MID=45298 Code=1 Uri=sensor
