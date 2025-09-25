@@ -1,0 +1,20 @@
+Test run at Thu Sep 25 00:44:00 -05 2025
+Server: 127.0.0.1:5683
+
+[TC-003.1] Normal POST with temperature/humidity
+[esp32_sim] Sending POST MID=42837 payload={"temp":20.43,"hum":42.7}
+[esp32_sim] ACK MID=42837, Code=65
+[esp32_sim] Payload: {"id":4}
+[esp32_sim] Sending POST MID=19775 payload={"temp":28.52,"hum":73.4}
+[esp32_sim] ACK MID=19775, Code=65
+[esp32_sim] Payload: {"id":5}
+
+[TC-003.2] Retransmission (simulate unavailable server)
+[esp32_sim] Sending POST MID=40015 payload={"temp":23.09,"hum":98.5}
+[esp32_sim] timeout, retransmit 1 (wait 2000 ms)
+[esp32_sim] timeout, retransmit 2 (wait 4000 ms)
+[esp32_sim] timeout, retransmit 3 (wait 8000 ms)
+[esp32_sim] timeout, retransmit 4 (wait 16000 ms)
+
+[TC-003.3] Send invalid UDP packet (malformed)
+[manual UDP sent: 'garbage']

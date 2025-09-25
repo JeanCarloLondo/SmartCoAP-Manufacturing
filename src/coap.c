@@ -254,14 +254,12 @@ void coap_build_rst_for(const coap_message_t *req, coap_message_t *rst)
     rst->message_id = req->message_id;
 }
 
-// Devuelve COAP_OK (0) o un error negativo definido en coap.h
 int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, size_t length)
 {
     if (!msg)
         return COAP_ERR_INVALID;
     if (!value && length > 0)
         return COAP_ERR_INVALID;
-    // tu serializador actual no soporta opciones con length > 15
     if (length > 15)
         return COAP_ERR_OPTION_OVERSIZE;
 

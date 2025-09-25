@@ -11,8 +11,8 @@
 #define BUF_SIZE 1500
 
 static void usage(const char *prog) {
-    printf("Uso: %s <server_ip> <method> [uri-path] [payload]\n", prog);
-    printf("Ejemplos:\n");
+    printf("Usage: %s <server_ip> <method> [uri-path] [payload]\n", prog);
+    printf("Examples:\n");
     printf("  %s 127.0.0.1 GET\n", prog);
     printf("  %s 127.0.0.1 POST sensor \"temp=25.5,hum=40\"\n", prog);
     printf("  %s 127.0.0.1 PUT sensor/1 \"1=temp=26.0,hum=42\"\n", prog);
@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
     else if (strcmp(method, "PUT") == 0) code = COAP_CODE_PUT;
     else if (strcmp(method, "DELETE") == 0) code = COAP_CODE_DELETE;
     else {
-        fprintf(stderr, "Método no soportado: %s\n", method);
+        fprintf(stderr, "Method not supported: %s\n", method);
         return 1;
     }
 
@@ -80,7 +80,7 @@ int main(int argc, char *argv[]) {
     uint8_t buffer[BUF_SIZE];
     int len = coap_serialize(&req, buffer, sizeof(buffer));
     if (len <= 0) {
-        fprintf(stderr, "Error serializando mensaje\n");
+        fprintf(stderr, "Error serializing message\n");
         coap_free_message(&req);
         return 1;
     }
@@ -98,13 +98,13 @@ int main(int argc, char *argv[]) {
     if (rlen > 0) {
         coap_message_t resp;
         if (coap_parse(rx, rlen, &resp) == COAP_OK) {
-            printf("Respuesta: Code=%u, MID=%u\n", resp.code, resp.message_id);
+            printf("Response: Code=%u, MID=%u\n", resp.code, resp.message_id);
             if (resp.payload_len > 0) {
                 printf("Payload: %.*s\n", (int)resp.payload_len, resp.payload);
             }
             coap_free_message(&resp);
         } else {
-            printf("Error parseando respuesta\n");
+            printf("Error parsing response\n");
         }
     } else {
         perror("recvfrom");
