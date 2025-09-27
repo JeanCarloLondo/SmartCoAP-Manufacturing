@@ -1,6 +1,6 @@
 // server.c  (unificado: concurrencia + CRUD + Uri-Path handling + portable threads)
 #include "coap.h"
-#include "storage.h"
+
 #include "db.h"
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -110,7 +110,7 @@ static int is_numeric(const char *s)
     return 1;
 }
 
-/* Worker */
+/* Worker function - modificada para usar SQLite */
 #if defined(_WIN32) || defined(_WIN64)
 DWORD WINAPI handle_client(LPVOID arg)
 #else
@@ -146,27 +146,35 @@ void *handle_client(void *arg)
         if (uri_path && is_numeric(uri_path))
         {
             int id = atoi(uri_path);
-            char *val = storage_get(id);
+            char *val = db_get_by_id(id);  // SQLite: obtener por ID específico
             if (val)
             {
                 resp.code = COAP_CODE_CONTENT;
                 resp.payload = (uint8_t *)val;
                 resp.payload_len = strlen(val);
+                fprintf(task->log_file, "GET id=%d: Found\n", id);
             }
             else
+            {
                 resp.code = COAP_CODE_NOT_FOUND;
+                fprintf(task->log_file, "GET id=%d: Not found\n", id);
+            }
         }
         else
         {
-            char *all = storage_get(0);
+            char *all = db_get_all();  // SQLite: obtener todos los registros
             if (all)
             {
                 resp.code = COAP_CODE_CONTENT;
                 resp.payload = (uint8_t *)all;
                 resp.payload_len = strlen(all);
+                fprintf(task->log_file, "GET all: Success\n");
             }
             else
-                resp.code = COAP_CODE_NOT_FOUND;
+            {
+                resp.code = COAP_CODE_INTERNAL_ERROR;
+                fprintf(task->log_file, "GET all: Database error\n");
+            }
         }
         break;
     }
@@ -176,20 +184,29 @@ void *handle_client(void *arg)
         {
             snprintf(tmpbuf, sizeof(tmpbuf), "%.*s",
                      (int)req.payload_len, (char *)req.payload);
-            int id = storage_add(0, tmpbuf);
-            if (id >= 0)
+            int id = db_insert(tmpbuf);  // SQLite: insertar nuevo registro
+            if (id > 0)
             {
                 snprintf(tmpbuf, sizeof(tmpbuf), "{\"id\":%d}", id);
                 resp.code = COAP_CODE_CREATED;
                 resp.payload_len = strlen(tmpbuf);
                 resp.payload = (uint8_t *)malloc(resp.payload_len);
-                memcpy(resp.payload, tmpbuf, resp.payload_len);
+                if (resp.payload) {
+                    memcpy(resp.payload, tmpbuf, resp.payload_len);
+                }
+                fprintf(task->log_file, "POST: Created id=%d\n", id);
             }
             else
+            {
                 resp.code = COAP_CODE_INTERNAL_ERROR;
+                fprintf(task->log_file, "POST: Database insert failed\n");
+            }
         }
         else
+        {
             resp.code = COAP_CODE_BAD_REQUEST;
+            fprintf(task->log_file, "POST: Empty payload\n");
+        }
         break;
     }
     case COAP_CODE_PUT:
@@ -209,26 +226,36 @@ void *handle_client(void *arg)
                     {
                         id = atoi(p);
                         strncpy(value, eq + 1, sizeof(value) - 1);
+                        value[sizeof(value) - 1] = '\0';
                     }
                 }
                 free(p);
             }
         }
-        if (id >= 0 && value[0])
+        if (id > 0 && value[0])
         {
-            if (storage_update(id, value) == 0)
+            if (db_update(id, value) == 0)  // SQLite: actualizar registro
             {
                 snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
                 resp.code = COAP_CODE_CHANGED;
                 resp.payload_len = strlen(tmpbuf);
                 resp.payload = (uint8_t *)malloc(resp.payload_len);
-                memcpy(resp.payload, tmpbuf, resp.payload_len);
+                if (resp.payload) {
+                    memcpy(resp.payload, tmpbuf, resp.payload_len);
+                }
+                fprintf(task->log_file, "PUT: Updated id=%d\n", id);
             }
             else
+            {
                 resp.code = COAP_CODE_NOT_FOUND;
+                fprintf(task->log_file, "PUT: id=%d not found\n", id);
+            }
         }
         else
+        {
             resp.code = COAP_CODE_BAD_REQUEST;
+            fprintf(task->log_file, "PUT: Invalid format (expected: id=value)\n");
+        }
         break;
     }
     case COAP_CODE_DELETE:
@@ -241,33 +268,42 @@ void *handle_client(void *arg)
                 id = atoi(p);
             free(p);
         }
-        if (id >= 0 && storage_delete(id) == 0)
+        if (id > 0 && db_delete(id) == 0)  
         {
             snprintf(tmpbuf, sizeof(tmpbuf), "{\"deleted\":%d}", id);
             resp.code = COAP_CODE_DELETED;
             resp.payload_len = strlen(tmpbuf);
             resp.payload = (uint8_t *)malloc(resp.payload_len);
-            memcpy(resp.payload, tmpbuf, resp.payload_len);
+            if (resp.payload) {
+                memcpy(resp.payload, tmpbuf, resp.payload_len);
+            }
+            fprintf(task->log_file, "DELETE: Deleted id=%d\n", id);
         }
         else
+        {
             resp.code = COAP_CODE_NOT_FOUND;
+            fprintf(task->log_file, "DELETE: id=%d not found or invalid\n", id);
+        }
         break;
     }
     default:
         resp.code = COAP_CODE_BAD_REQUEST;
+        fprintf(task->log_file, "Unsupported method code: %d\n", req.code);
         break;
     }
 
+    // Enviar respuesta
     uint8_t out[BUF_SIZE];
     int len = coap_serialize(&resp, out, sizeof(out));
     if (len > 0)
         sendto(task->sock, (const char *)out, len, 0,
                (struct sockaddr *)&task->client_addr, task->addr_len);
 
-    fprintf(task->log_file, "Processed MID=%u Code=%u Uri=%s\n",
-            req.message_id, req.code, uri_path ? uri_path : "(none)");
+    fprintf(task->log_file, "Processed MID=%u Code=%u Uri=%s Response=%d\n",
+            req.message_id, req.code, uri_path ? uri_path : "(none)", resp.code);
     fflush(task->log_file);
 
+    // Limpiar memoria
     if (uri_path)
         free(uri_path);
     coap_free_message(&req);
@@ -329,7 +365,7 @@ if (db_init(db_path) != 0) {
     }
 #endif
 
-    storage_init();
+    
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0)
@@ -350,13 +386,8 @@ if (db_init(db_path) != 0) {
     }
 
     printf("CoAP server listening on %d...\n", port);
-    // inicializar storage
-    if (storage_init() != 0)
-    {
-        fprintf(stderr, "Error inicializando storage\n");
-        return EXIT_FAILURE;
-    }
-    printf("Storage initialized.\n");
+
+
 
     while (1)
     {
@@ -401,7 +432,7 @@ if (db_init(db_path) != 0) {
 #else
     close(sock);
 #endif
-    storage_cleanup();
+    
     db_close();
     return EXIT_SUCCESS;
 }
