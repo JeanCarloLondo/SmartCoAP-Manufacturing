@@ -28,6 +28,7 @@ SRCDIR := src
 SERVER_DIR := server
 CLIENT_DIR := coap_client/main
 TESTDIR := tests
+LIBS := -lsqlite3
 
 # Sources
 COAP_SRC := $(SRCDIR)/coap.c
@@ -38,6 +39,7 @@ CLIENT_UTIL_SRC := $(TESTDIR)/client.c   # optional util (tests/client.c)
 # Objects
 COAP_OBJ := $(OBJDIR)/coap.o
 SERVER_OBJS := $(patsubst $(SERVER_DIR)/%.c,$(OBJDIR)/%.o,$(SERVER_SRC))
+DB_OBJ := $(OBJDIR)/db.o
 COAP_CLIENT_OBJ := $(OBJDIR)/coap_client.o
 CLIENT_UTIL_OBJ := $(OBJDIR)/client.o
 
@@ -68,8 +70,8 @@ all: server coap_client esp32_sim test
 # -----------------------
 # Link rules
 # -----------------------
-$(SERVER_BIN): $(COAP_OBJ) $(SERVER_OBJS) | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^
+$(SERVER_BIN): $(COAP_OBJ) $(SERVER_OBJS) $(DB_OBJ) | $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 server: $(SERVER_BIN) expose
 	@echo "=> Running server: ./coap_server $(PORT) $(LOG)"
@@ -78,6 +80,9 @@ ifeq ($(RUN_BG),1)
 else
 	@./coap_server $(PORT) $(LOG)
 endif
+db_test: src/db_test.c build/obj/db.o
+	$(CC) $(CFLAGS) -I./src -o build/bin/db_test src/db_test.c build/obj/db.o -lsqlite3
+
 
 # -----------------------
 # ESP32 simulator

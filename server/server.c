@@ -1,6 +1,9 @@
 // server.c  (unificado: concurrencia + CRUD + Uri-Path handling + portable threads)
 #include "coap.h"
 #include "storage.h"
+#include "db.h"
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -280,6 +283,19 @@ void *handle_client(void *arg)
 
 int main(int argc, char *argv[])
 {
+
+    char db_path[512];
+snprintf(db_path, sizeof(db_path), "./coap_data.db");
+
+char db_dir[512];
+snprintf(db_dir, sizeof(db_dir), ".");
+mkdir(db_dir, 0755);
+
+if (db_init(db_path) != 0) {
+    fprintf(stderr, "Error inicializando base de datos: %s\n", db_path);
+    return EXIT_FAILURE;
+}
+
     int port = DEFAULT_PORT;
     FILE *logf = stdout;
 
@@ -334,6 +350,13 @@ int main(int argc, char *argv[])
     }
 
     printf("CoAP server listening on %d...\n", port);
+    // inicializar storage
+    if (storage_init() != 0)
+    {
+        fprintf(stderr, "Error inicializando storage\n");
+        return EXIT_FAILURE;
+    }
+    printf("Storage initialized.\n");
 
     while (1)
     {
@@ -379,5 +402,6 @@ int main(int argc, char *argv[])
     close(sock);
 #endif
     storage_cleanup();
-    return 0;
+    db_close();
+    return EXIT_SUCCESS;
 }
