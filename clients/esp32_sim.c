@@ -43,6 +43,7 @@ static int send_coap_and_wait_ack(int sock, struct sockaddr_in *srv,
     tv.tv_usec = (timeout_ms % 1000) * 1000;
 
     int rv = select(sock + 1, &rfds, NULL, NULL, &tv);
+    
     if (rv > 0 && FD_ISSET(sock, &rfds)) {
         uint8_t in[MAX_BUF];
         struct sockaddr_in from;

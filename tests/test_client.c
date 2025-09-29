@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include "../src/coap.h"
+#include <unistd.h>
 
 typedef struct {
     const char *server_ip;

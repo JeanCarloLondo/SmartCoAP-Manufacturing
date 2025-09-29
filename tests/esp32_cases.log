@@ -1,16 +1,16 @@
-Test run at Thu Sep 25 00:44:00 -05 2025
+Test run at Mon Sep 29 02:12:07 -05 2025
 Server: 127.0.0.1:5683
 
 [TC-003.1] Normal POST with temperature/humidity
-[esp32_sim] Sending POST MID=42837 payload={"temp":20.43,"hum":42.7}
-[esp32_sim] ACK MID=42837, Code=65
-[esp32_sim] Payload: {"id":4}
-[esp32_sim] Sending POST MID=19775 payload={"temp":28.52,"hum":73.4}
-[esp32_sim] ACK MID=19775, Code=65
-[esp32_sim] Payload: {"id":5}
+[esp32_sim] Sending POST MID=59019 payload={"temp":26.97,"hum":35.7}
+[esp32_sim] ACK MID=59019, Code=65
+[esp32_sim] Payload: {"id":307}
+[esp32_sim] Sending POST MID=14448 payload={"temp":29.22,"hum":96.4}
+[esp32_sim] ACK MID=14448, Code=65
+[esp32_sim] Payload: {"id":308}
 
 [TC-003.2] Retransmission (simulate unavailable server)
-[esp32_sim] Sending POST MID=40015 payload={"temp":23.09,"hum":98.5}
+[esp32_sim] Sending POST MID=39033 payload={"temp":28.04,"hum":64.5}
 [esp32_sim] timeout, retransmit 1 (wait 2000 ms)
 [esp32_sim] timeout, retransmit 2 (wait 4000 ms)
 [esp32_sim] timeout, retransmit 3 (wait 8000 ms)

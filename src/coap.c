@@ -22,7 +22,7 @@ void coap_init_message(coap_message_t *msg)
     msg->tkl = 0;
     msg->code = COAP_METHOD_EMPTY;
     msg->message_id = 0;
-    memset(msg->token, 0, COAP_MAX_TOKEN_LEN);
+    memset(msg->token, 0, sizeof msg->token);
 
     msg->options = NULL;
     msg->options_count = 0;
@@ -58,9 +58,12 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
     uint8_t first = ((msg->version & 0x03) << 6) |
                     (((uint8_t)msg->type & 0x03) << 4) |
                     (msg->tkl & 0x0F);
+
+    // second byte is code
     out_buf[0] = first;
     out_buf[1] = msg->code;
 
+    // third and fourth bytes are message ID
     uint16_t mid_net = htons(msg->message_id);
     out_buf[2] = (uint8_t)((mid_net >> 8) & 0xFF);
     out_buf[3] = (uint8_t)(mid_net & 0xFF);
@@ -100,7 +103,6 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
         memcpy(out_buf + idx, msg->payload, msg->payload_len);
         idx += msg->payload_len;
     }
-
     return (int)idx;
 }
 
@@ -130,8 +132,8 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
     msg->type = (coap_type_t)(type & 0x03);
     msg->tkl = tkl;
     msg->code = code;
-    msg->message_id = ntohs(mid_net);
-    memset(msg->token, 0, COAP_MAX_TOKEN_LEN);
+    msg->message_id = ((uint16_t)buf[2] << 8) | (uint16_t)buf[3];
+    memset(msg->token, 0, sizeof msg->token);
     msg->payload = NULL;
     msg->payload_len = 0;
     msg->options = NULL;
@@ -174,7 +176,7 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
         {
             return COAP_ERR_OPTIONS_NOT_SUPPORTED;
         }
-        if (idx + opt_len > buf_len)
+        if (idx + opt_len > buf_len)    
             return COAP_ERR_TRUNCATED;
 
         uint16_t opt_num = running_delta + opt_delta;
@@ -265,19 +267,21 @@ int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, 
 
     // find insertion point to keep options ordered by number
     size_t idx = 0;
-    for (; idx < msg->options_count; ++idx) {
+    for (; idx < msg->options_count; ++idx)
+    {
         if (msg->options[idx].number > number)
             break;
     }
 
     // realloc options array to hold one more
-    coap_option_t *tmp = (coap_option_t*)realloc(msg->options, (msg->options_count + 1) * sizeof(coap_option_t));
+    coap_option_t *tmp = (coap_option_t *)realloc(msg->options, (msg->options_count + 1) * sizeof(coap_option_t));
     if (!tmp)
         return COAP_ERR_INVALID;
     msg->options = tmp;
 
     // shift elements right from the end to idx
-    for (size_t j = msg->options_count; j > idx; --j) {
+    for (size_t j = msg->options_count; j > idx; --j)
+    {
         msg->options[j] = msg->options[j - 1];
     }
 
@@ -286,19 +290,25 @@ int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, 
     msg->options[idx].length = (uint16_t)length;
     msg->options[idx].value = NULL;
 
-    if (length > 0) {
-        msg->options[idx].value = (uint8_t*)malloc(length);
-        if (!msg->options[idx].value) {
+    if (length > 0)
+    {
+        msg->options[idx].value = (uint8_t *)malloc(length);
+        if (!msg->options[idx].value)
+        {
             // rollback: shift back and shrink array
             for (size_t j = idx; j < msg->options_count; ++j)
                 msg->options[j] = msg->options[j + 1];
             // reduce size
-            if (msg->options_count == 0) {
+            if (msg->options_count == 0)
+            {
                 free(msg->options);
                 msg->options = NULL;
-            } else {
-                coap_option_t *tmp2 = (coap_option_t*)realloc(msg->options, msg->options_count * sizeof(coap_option_t));
-                if (tmp2) msg->options = tmp2;
+            }
+            else
+            {
+                coap_option_t *tmp2 = (coap_option_t *)realloc(msg->options, msg->options_count * sizeof(coap_option_t));
+                if (tmp2)
+                    msg->options = tmp2;
             }
             return COAP_ERR_INVALID;
         }

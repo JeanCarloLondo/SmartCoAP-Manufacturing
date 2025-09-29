@@ -10,7 +10,7 @@ int db_init(const char *filename)
 {
     if (sqlite3_open(filename, &db) != SQLITE_OK)
     {
-        fprintf(stderr, "Error abriendo DB: %s\n", sqlite3_errmsg(db));
+        fprintf(stderr, "Error opening DB: %s\n", sqlite3_errmsg(db));
         return -1;
     }
     const char *sql =
@@ -21,7 +21,7 @@ int db_init(const char *filename)
     char *errmsg = NULL;
     if (sqlite3_exec(db, sql, 0, 0, &errmsg) != SQLITE_OK)
     {
-        fprintf(stderr, "Error creando tabla: %s\n", errmsg);
+        fprintf(stderr, "Error creating table: %s\n", errmsg);
         sqlite3_free(errmsg);
         return -1;
     }
@@ -128,8 +128,6 @@ int db_delete(int id)
     sqlite3_finalize(stmt);
     return (rc == SQLITE_DONE && sqlite3_changes(db) > 0) ? 0 : -1;
 }
-
-
 
 void db_close(void)
 {

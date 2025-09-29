@@ -3,3 +3,4 @@ Implementation of the Constrained Application Protocol (CoAP) using Berkeley soc
 
 //Developing (DELETE LATER)
 make run TEST=esp32_sim TEST_ARGS="127.0.0.1 5683 sensor 5 2"
+dos2unix sh_files/run_stress.sh

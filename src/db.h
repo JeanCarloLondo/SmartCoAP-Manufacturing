@@ -17,5 +17,4 @@ int db_delete(int id);
 
 void db_close(void);
 
-
 #endif // DB_H

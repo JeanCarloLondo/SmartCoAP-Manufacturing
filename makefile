@@ -3,16 +3,21 @@
 # so you can see them easily as ./coap_server, ./coap_client, ./client.
 #
 # Usage examples:
+
 #   make                 # build everything (server, client, tests)
 #   make server          # build and run ./coap_server $(PORT) $(LOG)
 #   make server PORT=5683 LOG=mylog.log     # run with custom port/log
 #   make server RUN_BG=1 PORT=5683 LOG=server.log  # run server in background
+
 #   make coap_client     # build client simulation and copy ./coap_client
 #   make esp32_sim       # build ESP32 simulator
 #   make test            # build tests (test_*.c)
-#   make run TEST=test_req001        # execute a specific test binary
-#   make run TEST=test_client        # run stress test via sh_files/run_stress.sh
-#   make run TEST=esp32_cases
+
+#   make run TEST=test_req001        # execute a specific test binary - TO PROVE PROTOCOL COMPLIANCE
+#   make run TEST=test_client        # run stress test via sh_files/run_stress.sh - TO PROVE SERVER CONCURRENCY
+#   make run TEST=db_test          # run db_test to verify DB operations
+#   make run TEST=esp32_cases       # run esp32_sim via sh_files/run_esp32_test.sh - TO PROVE ESP32 SIMULATION
+
 #   make clean           # remove build/ and root copies
 #
 # NOTE: Running `make server` in foreground will block your terminal.
@@ -61,6 +66,14 @@ ESP32_BIN := $(BINDIR)/esp32_sim
 PORT ?= 5683
 LOG ?= server.log
 RUN_BG ?= 0
+ESP32_IP ?= 127.0.0.1
+ESP32_PORT ?= 5683
+ESP32_TOPIC ?= sensor
+ESP32_INSTANCES ?= 500
+ESP32_REQS ?= 4
+
+ESP32_MSGS ?= 200 # messages per instance
+ESP32_INTERVAL ?= 4 # seconds between messages
 
 .PHONY: all clean test run help server coap_client client_util esp32_sim expose
 
@@ -80,9 +93,8 @@ ifeq ($(RUN_BG),1)
 else
 	@./coap_server $(PORT) $(LOG)
 endif
-db_test: src/db_test.c build/obj/db.o
-	$(CC) $(CFLAGS) -I./src -o build/bin/db_test src/db_test.c build/obj/db.o -lsqlite3
-
+db_test: tests/db_test.c build/obj/db.o
+	$(CC) $(CFLAGS) -I./src -o build/bin/db_test tests/db_test.c build/obj/db.o -lsqlite3
 
 # -----------------------
 # ESP32 simulator
@@ -94,10 +106,12 @@ $(ESP32_BIN): $(COAP_OBJ) $(ESP32_OBJ) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
 esp32_sim: $(ESP32_BIN) expose
-	@echo "ESP32 simulator ready -> ./esp32_sim"
-
-# -----------------------
-# Client utilities
+	@echo "ESP32 simulator built -> $(ESP32_BIN)"
+	@echo "Launching esp32_sim with defaults:"
+	@echo "  target: $(ESP32_IP):$(ESP32_PORT) topic=$(ESP32_TOPIC) instances=$(ESP32_INSTANCES) reqs=$(ESP32_REQS) msgs=$(ESP32_MSGS) interval=$(ESP32_INTERVAL)s"
+	@echo
+	@# run the simulator with the expanded arguments
+	@$(ESP32_BIN) $(ESP32_IP) $(ESP32_PORT) $(ESP32_TOPIC) $(ESP32_INSTANCES) $(ESP32_REQS) $(ESP32_MSGS) $(ESP32_INTERVAL)
 # -----------------------
 $(CLIENT_UTIL_OBJ): $(CLIENT_UTIL_SRC) | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -111,6 +125,14 @@ client: $(CLIENT_UTIL_BIN) expose
 $(COAP_CLIENT_BIN): $(COAP_OBJ) $(COAP_CLIENT_OBJ) | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+build/obj/db.o: src/db.c src/db.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I./src -c $< -o $@
+
+build/bin/db_test: build/obj/coap.o build/obj/db_test.o build/obj/db.o
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I./src -o $@ $^ -lsqlite3
+
 coap_client: $(COAP_CLIENT_BIN) expose
 	@echo "Client (minimal simulation) built and exposed as ./coap_client"
 
@@ -123,14 +145,20 @@ $(OBJDIR)/%.o: $(TESTDIR)/%.c | $(OBJDIR)
 $(BINDIR)/%: $(COAP_OBJ) $(OBJDIR)/%.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+build/obj/db_test.o: tests/db_test.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I./src -c $< -o $@
+
 test: $(TEST_BINS)
 	@echo "Tests compiled:"
 	@ls -1 $(TEST_BINS) 2>/dev/null || true
+	
 
 # -----------------------
 # Run logic
 # -----------------------
 run:
+
 ifndef TEST
 	$(error Specify TEST=<test_name> (e.g. TEST=test_req001))
 endif
@@ -141,10 +169,10 @@ endif
 		$(MAKE) esp32_sim; \
 		echo "Executing ESP32 simulator test..."; \
 		./sh_files/run_esp32_test.sh $(BINDIR)/esp32_sim $(TEST_ARGS); \
-	elif [ "$(TEST)" = "esp32_cases" ] && [ -x sh_files/run_esp32_cases.sh ]; then \
+	elif [ "$(TEST)" = "esp32_cases" ]; then \
 		$(MAKE) esp32_sim; \
 		echo "Executing ESP32 integration cases..."; \
-		./sh_files/run_esp32_cases.sh $(TEST_ARGS); \
+		bash sh_files/run_esp32_cases.sh $(ESP32_IP) $(ESP32_PORT); \
 	else \
 		if [ -x $(BINDIR)/$(TEST) ]; then \
 			echo "Executing $(TEST) $(TEST_ARGS)..."; \
