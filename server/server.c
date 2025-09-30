@@ -34,7 +34,7 @@ typedef pthread_t thread_t;
 #endif
 
 #define DEFAULT_PORT 5683
-#define BUF_SIZE 1500
+#define BUF_SIZE 8192
 typedef struct
 {
     int sock;
@@ -173,6 +173,25 @@ static int is_numeric(const char *s)
     return 1;
 }
 
+/* Helper to check if uri_path is sensor/<num> and return sensor number, else -1 */
+static int parse_sensor_uri(const char *uri_path)
+{
+    if (!uri_path)
+        return -1;
+    const char *p = uri_path;
+    // accept "sensor" or "sensor/<n>"
+    if (strncmp(p, "sensor", 6) != 0)
+        return -1;
+    p += 6;
+    if (*p == '\0')
+        return -1;
+    if (*p == '/')
+        p++;
+    if (!is_numeric(p))
+        return -1;
+    return atoi(p);
+}
+
 /* Worker function - SQLite */
 #if defined(_WIN32) || defined(_WIN64)
 DWORD WINAPI handle_client(LPVOID arg)
@@ -206,10 +225,27 @@ void *handle_client(void *arg)
     {
     case COAP_CODE_GET:
     {
-        if (uri_path && is_numeric(uri_path))
+        // If uri_path is numeric (id) OR sensor/<id> -> treat as id-get
+        int id = -1;
+        if (uri_path)
         {
-            int id = atoi(uri_path);
-            char *val = db_get_by_id(id); // SQLite: obtain specific ID
+            if (is_numeric(uri_path))
+            {
+                id = atoi(uri_path);
+            }
+            else
+            {
+                int sensor_as_id = parse_sensor_uri(uri_path);
+                if (sensor_as_id > 0)
+                {
+                    id = sensor_as_id;
+                }
+            }
+        }
+
+        if (id > 0)
+        {
+            char *val = db_get_by_id(id); // specific ID
             if (val)
             {
                 resp.code = COAP_CODE_CONTENT;
@@ -225,7 +261,8 @@ void *handle_client(void *arg)
         }
         else
         {
-            char *all = db_get_all(); // SQLite: ootain all records
+            // For now, GET all (could later filter by sensor)
+            char *all = db_get_all();
             if (all)
             {
                 resp.code = COAP_CODE_CONTENT;
@@ -245,23 +282,28 @@ void *handle_client(void *arg)
     {
         if (req.payload && req.payload_len > 0)
         {
-            /* copiar payload a tmpbuf de forma segura */
             snprintf(tmpbuf, sizeof(tmpbuf), "%.*s",
                      (int)req.payload_len, (char *)req.payload);
 
-            /* Detect if payload starts with numeric id followed by space or '=' => explicit id insert */
+            // If URI is sensor/<n> then insert with sensor id
+            int sensor_id = -1;
+            if (uri_path)
+            {
+                // support both "sensor" (no numeric) and "sensor/<n>"
+                sensor_id = parse_sensor_uri(uri_path);
+            }
+
+            // explicit id check (payload starts with "N " or "N=") preserved:
             int explicit_id = -1;
-            char *payload_copy = strndup(tmpbuf, strlen(tmpbuf));
+            char *payload_copy = strndup(tmpbuf, sizeof(tmpbuf));
             if (payload_copy)
             {
-                char *sep = strpbrk(payload_copy, " ="); /* search for space or '=' */
+                char *sep = strpbrk(payload_copy, " =");
                 if (sep)
                 {
                     *sep = '\0';
                     if (is_numeric(payload_copy))
-                    {
                         explicit_id = atoi(payload_copy);
-                    }
                 }
                 free(payload_copy);
             }
@@ -269,11 +311,10 @@ void *handle_client(void *arg)
             int id = -1;
             if (explicit_id > 0)
             {
-                /* explicit insert with provided id; value is everything after the first separator in tmpbuf */
                 char *value_part = strpbrk(tmpbuf, " =");
                 if (value_part)
                 {
-                    value_part++; /* skip separator */
+                    value_part++;
                     id = db_insert_with_id(explicit_id, value_part);
                     if (id > 0)
                     {
@@ -288,7 +329,7 @@ void *handle_client(void *arg)
                     else
                     {
                         resp.code = COAP_CODE_BAD_REQUEST;
-                        fprintf(task->log_file, "POST: explicit id=%d insert failed (exists or DB error)\n", explicit_id);
+                        fprintf(task->log_file, "POST: explicit id=%d insert failed\n", explicit_id);
                     }
                 }
                 else
@@ -297,9 +338,29 @@ void *handle_client(void *arg)
                     fprintf(task->log_file, "POST: explicit id provided but no value\n");
                 }
             }
+            else if (sensor_id > 0)
+            {
+                // insert tying to sensor id (db_insert_with_sensor must exist)
+                id = db_insert_with_sensor(sensor_id, tmpbuf);
+                if (id > 0)
+                {
+                    snprintf(tmpbuf, sizeof(tmpbuf), "{\"id\":%d}", id);
+                    resp.code = COAP_CODE_CREATED;
+                    resp.payload_len = strlen(tmpbuf);
+                    resp.payload = (uint8_t *)malloc(resp.payload_len);
+                    if (resp.payload)
+                        memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    fprintf(task->log_file, "POST: Created id=%d (sensor=%d)\n", id, sensor_id);
+                }
+                else
+                {
+                    resp.code = COAP_CODE_INTERNAL_ERROR;
+                    fprintf(task->log_file, "POST: sensor insert failed (sensor=%d)\n", sensor_id);
+                }
+            }
             else
             {
-                /* normal autoincrement insert: tmpbuf holds the value */
+                // normal autoincrement insert
                 id = db_insert(tmpbuf);
                 if (id > 0)
                 {

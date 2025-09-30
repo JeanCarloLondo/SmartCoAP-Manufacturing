@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <math.h>    
-#include <strings.h> 
+#include <math.h>
+#include <strings.h>
 
 static sqlite3 *db = NULL;
 
@@ -93,12 +93,16 @@ int db_insert_with_sensor(int sensor, const char *value)
 /* Return full JSON list */
 char *db_get_all(void)
 {
-    const char *sql = "SELECT id,value,timestamp FROM data ORDER BY id;";
+    // Get last 26 entries ordered by id desc (newest first)
+    const char *sql =
+        "SELECT id,value,timestamp FROM data "
+        "ORDER BY id DESC LIMIT 26;";
+
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
         return NULL;
 
-    size_t cap = 1024, len = 0;
+    size_t cap = 2048, len = 0;
     char *out = malloc(cap);
     if (!out)
         return NULL;
@@ -106,17 +110,34 @@ char *db_get_all(void)
     len += snprintf(out + len, cap - len, "[\n");
 
     int first = 1;
-    while (sqlite3_step(stmt) == SQLITE_ROW)
+    // save on a buffer first, then reverse order
+    typedef struct
     {
-        int id = sqlite3_column_int(stmt, 0);
-        const unsigned char *val = sqlite3_column_text(stmt, 1);
-        const unsigned char *ts = sqlite3_column_text(stmt, 2);
+        int id;
+        char val[256];
+        char ts[64];
+    } row_t;
+    row_t rows[26];
+    int count = 0;
 
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < 26)
+    {
+        rows[count].id = sqlite3_column_int(stmt, 0);
+        snprintf(rows[count].val, sizeof(rows[count].val), "%s",
+                 sqlite3_column_text(stmt, 1));
+        snprintf(rows[count].ts, sizeof(rows[count].ts), "%s",
+                 sqlite3_column_text(stmt, 2));
+        count++;
+    }
+    sqlite3_finalize(stmt);
+
+    // reverse order to have oldest first
+    for (int i = count - 1; i >= 0; i--)
+    {
         char item[512];
         int n = snprintf(item, sizeof(item),
                          "  %s{\"id\":%d, \"value\":\"%s\", \"ts\":\"%s\"}",
-                         first ? "" : ",\n", id, val, ts);
-
+                         first ? "" : ",\n", rows[i].id, rows[i].val, rows[i].ts);
         if (len + n + 2 > cap)
         {
             cap = (cap + n) * 2;
@@ -126,8 +147,8 @@ char *db_get_all(void)
         len += n;
         first = 0;
     }
+
     len += snprintf(out + len, cap - len, "\n]");
-    sqlite3_finalize(stmt);
     return out;
 }
 
