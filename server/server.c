@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <winsock2.h>
@@ -46,6 +47,26 @@ typedef struct
 } client_task_t;
 
 /* Helpers */
+
+static void log_message(FILE *logf, const char *level, const char *fmt, ...) {
+    if (!logf) return;
+
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char tbuf[32];
+    strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", t);
+
+    fprintf(logf, "[%s] %s: ", tbuf, level);
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(logf, fmt, args);
+    va_end(args);
+
+    fprintf(logf, "\n");
+    fflush(logf);
+}
+
 static void init_response_from_request(const coap_message_t *req, coap_message_t *resp)
 {
     coap_init_message(resp);
@@ -206,7 +227,7 @@ void *handle_client(void *arg)
 
     if (coap_parse(task->buffer, (size_t)task->msg_len, &req) != COAP_OK)
     {
-        fprintf(task->log_file, "Failed to parse CoAP message\n");
+        log_message(task->log_file, "ERROR", "Failed to parse CoAP message\n");
         free(task);
 #if defined(_WIN32) || defined(_WIN64)
         return 0;
@@ -251,12 +272,12 @@ void *handle_client(void *arg)
                 resp.code = COAP_CODE_CONTENT;
                 resp.payload = (uint8_t *)val;
                 resp.payload_len = strlen(val);
-                fprintf(task->log_file, "GET id=%d: Found\n", id);
+                log_message(task->log_file, "INFO", "GET id=%d: Found", id);
             }
             else
             {
                 resp.code = COAP_CODE_NOT_FOUND;
-                fprintf(task->log_file, "GET id=%d: Not found\n", id);
+                log_message(task->log_file, "ERROR", "GET id=%d: Not found", id);
             }
         }
         else
@@ -268,12 +289,12 @@ void *handle_client(void *arg)
                 resp.code = COAP_CODE_CONTENT;
                 resp.payload = (uint8_t *)all;
                 resp.payload_len = strlen(all);
-                fprintf(task->log_file, "GET all: Success\n");
+                log_message(task->log_file, "INFO", "GET all: Success");
             }
             else
             {
                 resp.code = COAP_CODE_INTERNAL_ERROR;
-                fprintf(task->log_file, "GET all: Database error\n");
+                log_message(task->log_file, "ERROR", "GET all: Database error");
             }
         }
         break;
@@ -324,18 +345,18 @@ void *handle_client(void *arg)
                         resp.payload = (uint8_t *)malloc(resp.payload_len);
                         if (resp.payload)
                             memcpy(resp.payload, tmpbuf, resp.payload_len);
-                        fprintf(task->log_file, "POST: Created id=%d (explicit)\n", id);
+                        log_message(task->log_file, "INFO", "POST: Created id=%d (explicit)", id);
                     }
                     else
                     {
                         resp.code = COAP_CODE_BAD_REQUEST;
-                        fprintf(task->log_file, "POST: explicit id=%d insert failed\n", explicit_id);
+                        log_message(task->log_file, "ERROR", "POST: explicit id=%d insert failed", explicit_id);
                     }
                 }
                 else
                 {
                     resp.code = COAP_CODE_BAD_REQUEST;
-                    fprintf(task->log_file, "POST: explicit id provided but no value\n");
+                    log_message(task->log_file, "ERROR", "POST: explicit id provided but no value");
                 }
             }
             else if (sensor_id > 0)
@@ -350,12 +371,12 @@ void *handle_client(void *arg)
                     resp.payload = (uint8_t *)malloc(resp.payload_len);
                     if (resp.payload)
                         memcpy(resp.payload, tmpbuf, resp.payload_len);
-                    fprintf(task->log_file, "POST: Created id=%d (sensor=%d)\n", id, sensor_id);
+                    log_message(task->log_file, "INFO", "POST: Created id=%d (sensor=%d)", id, sensor_id);
                 }
                 else
                 {
                     resp.code = COAP_CODE_INTERNAL_ERROR;
-                    fprintf(task->log_file, "POST: sensor insert failed (sensor=%d)\n", sensor_id);
+                    log_message(task->log_file, "ERROR", "POST: sensor insert failed (sensor=%d)", sensor_id);
                 }
             }
             else
@@ -370,19 +391,19 @@ void *handle_client(void *arg)
                     resp.payload = (uint8_t *)malloc(resp.payload_len);
                     if (resp.payload)
                         memcpy(resp.payload, tmpbuf, resp.payload_len);
-                    fprintf(task->log_file, "POST: Created id=%d\n", id);
+                    log_message(task->log_file, "INFO", "POST: Created id=%d", id);
                 }
                 else
                 {
                     resp.code = COAP_CODE_INTERNAL_ERROR;
-                    fprintf(task->log_file, "POST: Database insert failed\n");
+                    log_message(task->log_file, "ERROR", "POST: Database insert failed");
                 }
             }
         }
         else
         {
             resp.code = COAP_CODE_BAD_REQUEST;
-            fprintf(task->log_file, "POST: Empty payload\n");
+            log_message(task->log_file, "ERROR", "POST: Empty payload");
         }
         break;
     }
@@ -439,12 +460,12 @@ void *handle_client(void *arg)
                     resp.payload = (uint8_t *)malloc(resp.payload_len);
                     if (resp.payload)
                         memcpy(resp.payload, tmpbuf, resp.payload_len);
-                    fprintf(task->log_file, "PUT: Updated id=%d (temp+hum)\n", id);
+                    log_message(task->log_file, "INFO", "PUT: Updated id=%d (temp+hum)", id);
                 }
                 else
                 {
                     resp.code = COAP_CODE_NOT_FOUND;
-                    fprintf(task->log_file, "PUT: id=%d not found (temp+hum)\n", id);
+                    log_message(task->log_file, "ERROR", "PUT: id=%d not found (temp+hum)\n", id);
                 }
             }
             else if (has_temp)
@@ -460,18 +481,18 @@ void *handle_client(void *arg)
                         resp.payload = (uint8_t *)malloc(resp.payload_len);
                         if (resp.payload)
                             memcpy(resp.payload, tmpbuf, resp.payload_len);
-                        fprintf(task->log_file, "PUT: Updated temp id=%d\n", id);
+                        log_message(task->log_file, "INFO", "PUT: Updated temp id=%d", id);
                     }
                     else
                     {
                         resp.code = COAP_CODE_NOT_FOUND;
-                        fprintf(task->log_file, "PUT: id=%d not found (temp)\n", id);
+                        log_message(task->log_file, "ERROR", "PUT: id=%d not found (temp)", id);
                     }
                 }
                 else
                 {
                     resp.code = COAP_CODE_BAD_REQUEST;
-                    fprintf(task->log_file, "PUT: temp value parse error for id=%d\n", id);
+                    log_message(task->log_file, "ERROR", "PUT: temp value parse error for id=%d", id);
                 }
             }
             else if (has_hum)
@@ -487,18 +508,18 @@ void *handle_client(void *arg)
                         resp.payload = (uint8_t *)malloc(resp.payload_len);
                         if (resp.payload)
                             memcpy(resp.payload, tmpbuf, resp.payload_len);
-                        fprintf(task->log_file, "PUT: Updated hum id=%d\n", id);
+                        log_message(task->log_file, "INFO", "PUT: Updated hum id=%d", id);
                     }
                     else
                     {
                         resp.code = COAP_CODE_NOT_FOUND;
-                        fprintf(task->log_file, "PUT: id=%d not found (hum)\n", id);
+                        log_message(task->log_file, "ERROR", "PUT: id=%d not found (hum)", id);
                     }
                 }
                 else
                 {
                     resp.code = COAP_CODE_BAD_REQUEST;
-                    fprintf(task->log_file, "PUT: hum value parse error for id=%d\n", id);
+                    log_message(task->log_file, "ERROR", "PUT: hum value parse error for id=%d", id);
                 }
             }
             else
@@ -512,12 +533,12 @@ void *handle_client(void *arg)
                     resp.payload = (uint8_t *)malloc(resp.payload_len);
                     if (resp.payload)
                         memcpy(resp.payload, tmpbuf, resp.payload_len);
-                    fprintf(task->log_file, "PUT: Updated id=%d (full replace)\n", id);
+                    log_message(task->log_file, "INFO", "PUT: Updated id=%d (full replace)", id);
                 }
                 else
                 {
                     resp.code = COAP_CODE_NOT_FOUND;
-                    fprintf(task->log_file, "PUT: id=%d not found (full)\n", id);
+                    log_message(task->log_file, "ERROR", "PUT: id=%d not found (full)", id);
                 }
             }
 
@@ -526,7 +547,7 @@ void *handle_client(void *arg)
         else
         {
             resp.code = COAP_CODE_BAD_REQUEST;
-            fprintf(task->log_file, "PUT: Invalid format (expected: id=value)\n");
+            log_message(task->log_file, "ERROR", "PUT: Invalid format (expected: id=value)");
         }
         break;
     }
@@ -550,18 +571,18 @@ void *handle_client(void *arg)
             {
                 memcpy(resp.payload, tmpbuf, resp.payload_len);
             }
-            fprintf(task->log_file, "DELETE: Deleted id=%d\n", id);
+            log_message(task->log_file, "INFO", "DELETE: Deleted id=%d", id);
         }
         else
         {
             resp.code = COAP_CODE_NOT_FOUND;
-            fprintf(task->log_file, "DELETE: id=%d not found or invalid\n", id);
+            log_message(task->log_file, "ERROR", "DELETE: id=%d not found or invalid", id);
         }
         break;
     }
     default:
         resp.code = COAP_CODE_BAD_REQUEST;
-        fprintf(task->log_file, "Unsupported method code: %d\n", req.code);
+        log_message(task->log_file, "ERROR", "Unsupported method code: %d", req.code);
         break;
     }
 
@@ -578,20 +599,17 @@ void *handle_client(void *arg)
         }
         else
         {
-            fprintf(task->log_file,
-                    "coap_serialize failed (out_size=%zu payload_len=%zu)\n",
+            log_message(task->log_file, "ERROR", "coap_serialize failed (out_size=%zu payload_len=%zu)\n",
                     out_size, (size_t)resp.payload_len);
         }
         free(out);
     }
     else
     {
-        fprintf(task->log_file,
-                "malloc failed for out buffer (size=%zu)\n", out_size);
+        log_message(task->log_file, "ERROR", "malloc failed for out buffer (size=%zu)", out_size);
     }
 
-    fprintf(task->log_file,
-            "Processed MID=%u Code=%u Uri=%s Response=%d\n",
+    log_message(task->log_file, "INFO", "Processed MID=%u Code=%u Uri=%s Response=%d",
             req.message_id, req.code,
             uri_path ? uri_path : "(none)",
             resp.code);
@@ -700,7 +718,7 @@ int main(int argc, char *argv[])
         thread_t tid = CreateThread(NULL, 0, handle_client, task, 0, NULL);
         if (tid == NULL)
         {
-            fprintf(logf, "CreateThread failed\n");
+            log_message(logf, "ERROR", "CreateThread failed");
             free(task);
             continue;
         }
@@ -709,7 +727,7 @@ int main(int argc, char *argv[])
         thread_t tid;
         if (pthread_create(&tid, NULL, handle_client, task) != 0)
         {
-            fprintf(logf, "pthread_create failed\n");
+            log_message(logf, "ERROR", "pthread_create failed");
             free(task);
             continue;
         }
