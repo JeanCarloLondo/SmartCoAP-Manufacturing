@@ -1,27 +1,6 @@
 # Unified Makefile (SmartCoAP-Manufacturing)
 # Binaries are built into build/bin but then copied to the project root
-# so you can see them easily as ./coap_server, ./coap_client, ./client.
-#
-# Usage examples:
-
-#   make                 # build everything (server, client, tests)
-#   make server          # build and run ./coap_server $(PORT) $(LOG)
-#   make server PORT=5683 LOG=mylog.log     # run with custom port/log
-#   make server RUN_BG=1 PORT=5683 LOG=server.log  # run server in background
-
-#   make coap_client     # build client simulation and copy ./coap_client
-#   make esp32_sim       # build ESP32 simulator
-#   make test            # build tests (test_*.c)
-
-#   make run TEST=test_req001        # execute a specific test binary - TO PROVE PROTOCOL COMPLIANCE
-#   make run TEST=test_client        # run stress test via sh_files/run_stress.sh - TO PROVE SERVER CONCURRENCY
-#   make run TEST=db_test          # run db_test to verify DB operations
-#   make run TEST=esp32_cases       # run esp32_sim via sh_files/run_esp32_test.sh - TO PROVE ESP32 SIMULATION
-
-#   make clean           # remove build/ and root copies
-#
-# NOTE: Running `make server` in foreground will block your terminal.
-# Set RUN_BG=1 to run it in background (Make will return immediately).
+# so you can see them easily as ./coap_server, ./client, ./esp32_sim
 
 CC := gcc
 CFLAGS := -std=c11 -Wall -Wextra -g -I./src -pthread -D_POSIX_C_SOURCE=200809L
@@ -31,21 +10,21 @@ BINDIR := build/bin
 
 SRCDIR := src
 SERVER_DIR := server
-CLIENT_DIR := coap_client/main
+CLIENT_DIR := clients
 TESTDIR := tests
 LIBS := -lsqlite3
 
 # Sources
 COAP_SRC := $(SRCDIR)/coap.c
+CLIENT_SRC := $(CLIENT_DIR)/client.c
 SERVER_SRC := $(wildcard $(SERVER_DIR)/*.c)
-COAP_CLIENT_SRC := $(CLIENT_DIR)/coap_client.c
+COAP_CLIENT_SRC := # unused (kept for compatibility)
 CLIENT_UTIL_SRC := $(TESTDIR)/client.c   # optional util (tests/client.c)
 
 # Objects
 COAP_OBJ := $(OBJDIR)/coap.o
 SERVER_OBJS := $(patsubst $(SERVER_DIR)/%.c,$(OBJDIR)/%.o,$(SERVER_SRC))
 DB_OBJ := $(OBJDIR)/db.o
-COAP_CLIENT_OBJ := $(OBJDIR)/coap_client.o
 CLIENT_UTIL_OBJ := $(OBJDIR)/client.o
 
 # Tests (exclude tests/client.c to avoid name collisions)
@@ -56,9 +35,9 @@ TEST_BINS := $(patsubst $(TESTDIR)/%.c,$(BINDIR)/%,$(TEST_SRCS))
 
 # Binaries (primary outputs)
 SERVER_BIN := $(BINDIR)/coap_server
-COAP_CLIENT_BIN := $(BINDIR)/coap_client
-CLIENT_UTIL_BIN := $(BINDIR)/client
-ESP32_SRC := clients/esp32_sim.c
+CLIENT_BIN := $(BINDIR)/client
+CLIENT_UTIL_BIN := $(BINDIR)/client    # legacy name kept for expose
+ESP32_SRC := $(CLIENT_DIR)/esp32_sim.c
 ESP32_OBJ := $(OBJDIR)/esp32_sim.o
 ESP32_BIN := $(BINDIR)/esp32_sim
 
@@ -75,10 +54,10 @@ ESP32_REQS ?= 4
 ESP32_MSGS ?= 200 # messages per instance
 ESP32_INTERVAL ?= 4 # seconds between messages
 
-.PHONY: all clean test run help server coap_client client_util esp32_sim expose
+.PHONY: all clean test run help server client esp32_sim expose
 
-all: server coap_client esp32_sim test
-	@echo "Build completed: server, coap_client, esp32_sim and tests compiled."
+all: server esp32_sim test
+	@echo "Build completed: server, esp32_sim and tests compiled."
 
 # -----------------------
 # Link rules
@@ -93,6 +72,7 @@ ifeq ($(RUN_BG),1)
 else
 	@./coap_server $(PORT) $(LOG)
 endif
+
 db_test: tests/db_test.c build/obj/db.o
 	$(CC) $(CFLAGS) -I./src -o build/bin/db_test tests/db_test.c build/obj/db.o -lsqlite3
 
@@ -110,31 +90,22 @@ esp32_sim: $(ESP32_BIN) expose
 	@echo "Launching esp32_sim with defaults:"
 	@echo "  target: $(ESP32_IP):$(ESP32_PORT) topic=$(ESP32_TOPIC) instances=$(ESP32_INSTANCES) reqs=$(ESP32_REQS) msgs=$(ESP32_MSGS) interval=$(ESP32_INTERVAL)s"
 	@echo
-	@# run the simulator with the expanded arguments
 	@$(ESP32_BIN) $(ESP32_IP) $(ESP32_PORT) $(ESP32_TOPIC) $(ESP32_INSTANCES) $(ESP32_REQS) $(ESP32_MSGS) $(ESP32_INTERVAL)
+
 # -----------------------
-$(CLIENT_UTIL_OBJ): $(CLIENT_UTIL_SRC) | $(OBJDIR)
+# client (console client)
+# -----------------------
+$(OBJDIR)/client.o: $(CLIENT_SRC) | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(CLIENT_UTIL_BIN): $(COAP_OBJ) $(CLIENT_UTIL_OBJ) | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^
+$(CLIENT_BIN): $(COAP_OBJ) $(OBJDIR)/client.o | $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
-client: $(CLIENT_UTIL_BIN) expose
-	@echo "Robust client ready -> ./client"
-
-$(COAP_CLIENT_BIN): $(COAP_OBJ) $(COAP_CLIENT_OBJ) | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^
-
-build/obj/db.o: src/db.c src/db.h
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I./src -c $< -o $@
-
-build/bin/db_test: build/obj/coap.o build/obj/db_test.o build/obj/db.o
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I./src -o $@ $^ -lsqlite3
-
-coap_client: $(COAP_CLIENT_BIN) expose
-	@echo "Client (minimal simulation) built and exposed as ./coap_client"
+client: $(CLIENT_BIN) expose
+	@echo "Client built -> $(CLIENT_BIN)"
+	@echo "Launching client with defaults:"
+	@# run the root-exposed binary so behavior mirrors server/esp32_sim
+	@./client
 
 # -----------------------
 # Tests
@@ -145,14 +116,12 @@ $(OBJDIR)/%.o: $(TESTDIR)/%.c | $(OBJDIR)
 $(BINDIR)/%: $(COAP_OBJ) $(OBJDIR)/%.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
-build/obj/db_test.o: tests/db_test.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I./src -c $< -o $@
-
+build/bin/db_test: build/obj/db_test.o build/obj/db.o
+	$(CC) $(CFLAGS) -o $@ $^ -lsqlite3
+	
 test: $(TEST_BINS)
 	@echo "Tests compiled:"
 	@ls -1 $(TEST_BINS) 2>/dev/null || true
-	
 
 # -----------------------
 # Run logic
@@ -204,8 +173,7 @@ $(OBJDIR)/%.o: $(CLIENT_DIR)/%.c | $(OBJDIR)
 expose: | $(BINDIR)
 	@echo "Exposing main binaries to project root..."
 	@if [ -f $(SERVER_BIN) ]; then install -m755 $(SERVER_BIN) ./coap_server; fi
-	@if [ -f $(COAP_CLIENT_BIN) ]; then install -m755 $(COAP_CLIENT_BIN) ./coap_client; fi
-	@if [ -f $(CLIENT_UTIL_BIN) ]; then install -m755 $(CLIENT_UTIL_BIN) ./client; fi
+	@if [ -f $(CLIENT_BIN) ]; then install -m755 $(CLIENT_BIN) ./client; fi
 	@if [ -f $(ESP32_BIN) ]; then install -m755 $(ESP32_BIN) ./esp32_sim; fi
 
 # -----------------------
@@ -232,8 +200,8 @@ help:
 	@echo "Available targets:"
 	@echo "  make                 -> build server, clients and tests"
 	@echo "  make server          -> build and run ./coap_server (set PORT, LOG, RUN_BG)"
-	@echo "  make coap_client     -> build minimal client ./coap_client"
-	@echo "  make client          -> build robust client ./client"
+	@echo "  make coap_client     -> (not used) kept for compatibility"
+	@echo "  make client          -> build robust client ./client and run it"
 	@echo "  make esp32_sim       -> build ESP32 simulator ./esp32_sim"
 	@echo "  make test            -> build tests (test_*.c)"
 	@echo "  make run TEST=<name> -> run test (special cases: test_client, esp32_sim)"

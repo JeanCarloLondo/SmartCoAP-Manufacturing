@@ -27,6 +27,9 @@ typedef HANDLE thread_t;
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <ctype.h>
+#include <strings.h>
+
 typedef pthread_t thread_t;
 #endif
 
@@ -58,6 +61,68 @@ static void init_response_from_request(const coap_message_t *req, coap_message_t
         resp->type = COAP_TYPE_NON;
     else
         resp->type = COAP_TYPE_RST;
+}
+
+/* trim in-place, returns pointer to trimmed string (same buffer) */
+static char *trim_inplace(char *s)
+{
+    if (!s)
+        return s;
+    char *start = s;
+    while (*start && isspace((unsigned char)*start))
+        start++;
+    if (start != s)
+        memmove(s, start, strlen(start) + 1);
+    char *end = s + strlen(s) - 1;
+    while (end >= s && isspace((unsigned char)*end))
+    {
+        *end = '\0';
+        end--;
+    }
+    return s;
+}
+
+/* extract numeric token after token (like "temp" or "hum") into out (null-terminated).
+   Returns 1 if something copied, 0 otherwise. Accepts colon or space separators and decimals.
+*/
+static int extract_number_after(const char *s, const char *token, char *out, size_t outsz)
+{
+    if (!s || !token || !out)
+        return 0;
+    const char *p = strstr(s, token);
+    if (!p)
+        return 0;
+    p = strchr(p, ':');
+    if (!p)
+        p = strchr(p, ' ');
+    if (!p)
+        return 0;
+    p++;
+    while (*p && isspace((unsigned char)*p))
+        p++;
+    size_t i = 0;
+    if (*p == '+' || *p == '-')
+    {
+        if (i + 1 < outsz)
+            out[i++] = *p++;
+    }
+    while (*p && (isdigit((unsigned char)*p) || *p == '.' || *p == ','))
+    {
+        if (i + 1 >= outsz)
+            break;
+        if (*p == ',')
+            out[i++] = '.';
+        else
+            out[i++] = *p;
+        p++;
+    }
+    if (i == 0)
+    {
+        out[0] = '\0';
+        return 0;
+    }
+    out[i] = '\0';
+    return 1;
 }
 
 static char *extract_uri_path(const coap_message_t *req)
@@ -180,25 +245,77 @@ void *handle_client(void *arg)
     {
         if (req.payload && req.payload_len > 0)
         {
+            /* copiar payload a tmpbuf de forma segura */
             snprintf(tmpbuf, sizeof(tmpbuf), "%.*s",
                      (int)req.payload_len, (char *)req.payload);
-            int id = db_insert(tmpbuf); // SQLite: insert new record
-            if (id > 0)
+
+            /* Detect if payload starts with numeric id followed by space or '=' => explicit id insert */
+            int explicit_id = -1;
+            char *payload_copy = strndup(tmpbuf, strlen(tmpbuf));
+            if (payload_copy)
             {
-                snprintf(tmpbuf, sizeof(tmpbuf), "{\"id\":%d}", id);
-                resp.code = COAP_CODE_CREATED;
-                resp.payload_len = strlen(tmpbuf);
-                resp.payload = (uint8_t *)malloc(resp.payload_len);
-                if (resp.payload)
+                char *sep = strpbrk(payload_copy, " ="); /* search for space or '=' */
+                if (sep)
                 {
-                    memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    *sep = '\0';
+                    if (is_numeric(payload_copy))
+                    {
+                        explicit_id = atoi(payload_copy);
+                    }
                 }
-                fprintf(task->log_file, "POST: Created id=%d\n", id);
+                free(payload_copy);
+            }
+
+            int id = -1;
+            if (explicit_id > 0)
+            {
+                /* explicit insert with provided id; value is everything after the first separator in tmpbuf */
+                char *value_part = strpbrk(tmpbuf, " =");
+                if (value_part)
+                {
+                    value_part++; /* skip separator */
+                    id = db_insert_with_id(explicit_id, value_part);
+                    if (id > 0)
+                    {
+                        snprintf(tmpbuf, sizeof(tmpbuf), "{\"id\":%d}", id);
+                        resp.code = COAP_CODE_CREATED;
+                        resp.payload_len = strlen(tmpbuf);
+                        resp.payload = (uint8_t *)malloc(resp.payload_len);
+                        if (resp.payload)
+                            memcpy(resp.payload, tmpbuf, resp.payload_len);
+                        fprintf(task->log_file, "POST: Created id=%d (explicit)\n", id);
+                    }
+                    else
+                    {
+                        resp.code = COAP_CODE_BAD_REQUEST;
+                        fprintf(task->log_file, "POST: explicit id=%d insert failed (exists or DB error)\n", explicit_id);
+                    }
+                }
+                else
+                {
+                    resp.code = COAP_CODE_BAD_REQUEST;
+                    fprintf(task->log_file, "POST: explicit id provided but no value\n");
+                }
             }
             else
             {
-                resp.code = COAP_CODE_INTERNAL_ERROR;
-                fprintf(task->log_file, "POST: Database insert failed\n");
+                /* normal autoincrement insert: tmpbuf holds the value */
+                id = db_insert(tmpbuf);
+                if (id > 0)
+                {
+                    snprintf(tmpbuf, sizeof(tmpbuf), "{\"id\":%d}", id);
+                    resp.code = COAP_CODE_CREATED;
+                    resp.payload_len = strlen(tmpbuf);
+                    resp.payload = (uint8_t *)malloc(resp.payload_len);
+                    if (resp.payload)
+                        memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    fprintf(task->log_file, "POST: Created id=%d\n", id);
+                }
+                else
+                {
+                    resp.code = COAP_CODE_INTERNAL_ERROR;
+                    fprintf(task->log_file, "POST: Database insert failed\n");
+                }
             }
         }
         else
@@ -208,48 +325,142 @@ void *handle_client(void *arg)
         }
         break;
     }
+
     case COAP_CODE_PUT:
     {
         int id = -1;
-        char value[512] = {0};
+        char *payload = NULL;
         if (req.payload && req.payload_len > 0)
         {
             char *p = strndup((char *)req.payload, req.payload_len);
             if (p)
             {
+                /* Accept formats: "id=value" or "id = value" (tolerant to spaces) */
                 char *eq = strchr(p, '=');
                 if (eq)
                 {
                     *eq = '\0';
+                    trim_inplace(p);
+                    trim_inplace(eq + 1);
                     if (is_numeric(p))
                     {
                         id = atoi(p);
-                        strncpy(value, eq + 1, sizeof(value) - 1);
-                        value[sizeof(value) - 1] = '\0';
+                        payload = strdup(eq + 1);
                     }
                 }
                 free(p);
             }
         }
-        if (id > 0 && value[0])
+
+        if (id > 0 && payload && payload[0])
         {
-            if (db_update(id, value) == 0) // SQLite: update record
+            /* Detect intent: update only temp, only hum, both, or full replace */
+            int has_temp = (strstr(payload, "temp") != NULL);
+            int has_hum = (strstr(payload, "hum") != NULL);
+
+            if (has_temp && has_hum)
             {
-                snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
-                resp.code = COAP_CODE_CHANGED;
-                resp.payload_len = strlen(tmpbuf);
-                resp.payload = (uint8_t *)malloc(resp.payload_len);
-                if (resp.payload)
+                /* extract both numbers and create normalized JSON {"temp":X,"hum":Y} */
+                char tbuf[64] = {0}, hbuf[64] = {0};
+                int okt = extract_number_after(payload, "temp", tbuf, sizeof(tbuf));
+                int okh = extract_number_after(payload, "hum", hbuf, sizeof(hbuf));
+                if (!okt)
+                    strcpy(tbuf, "0");
+                if (!okh)
+                    strcpy(hbuf, "0");
+                char combined[128];
+                snprintf(combined, sizeof(combined), "{\"temp\":%s,\"hum\":%s}", tbuf, hbuf);
+                if (db_update(id, combined) == 0)
                 {
-                    memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
+                    resp.code = COAP_CODE_CHANGED;
+                    resp.payload_len = strlen(tmpbuf);
+                    resp.payload = (uint8_t *)malloc(resp.payload_len);
+                    if (resp.payload)
+                        memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    fprintf(task->log_file, "PUT: Updated id=%d (temp+hum)\n", id);
                 }
-                fprintf(task->log_file, "PUT: Updated id=%d\n", id);
+                else
+                {
+                    resp.code = COAP_CODE_NOT_FOUND;
+                    fprintf(task->log_file, "PUT: id=%d not found (temp+hum)\n", id);
+                }
+            }
+            else if (has_temp)
+            {
+                char tbuf[64] = {0};
+                if (extract_number_after(payload, "temp", tbuf, sizeof(tbuf)))
+                {
+                    if (db_update_field_in_json(id, "temp", tbuf) == 0)
+                    {
+                        snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
+                        resp.code = COAP_CODE_CHANGED;
+                        resp.payload_len = strlen(tmpbuf);
+                        resp.payload = (uint8_t *)malloc(resp.payload_len);
+                        if (resp.payload)
+                            memcpy(resp.payload, tmpbuf, resp.payload_len);
+                        fprintf(task->log_file, "PUT: Updated temp id=%d\n", id);
+                    }
+                    else
+                    {
+                        resp.code = COAP_CODE_NOT_FOUND;
+                        fprintf(task->log_file, "PUT: id=%d not found (temp)\n", id);
+                    }
+                }
+                else
+                {
+                    resp.code = COAP_CODE_BAD_REQUEST;
+                    fprintf(task->log_file, "PUT: temp value parse error for id=%d\n", id);
+                }
+            }
+            else if (has_hum)
+            {
+                char hbuf[64] = {0};
+                if (extract_number_after(payload, "hum", hbuf, sizeof(hbuf)))
+                {
+                    if (db_update_field_in_json(id, "hum", hbuf) == 0)
+                    {
+                        snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
+                        resp.code = COAP_CODE_CHANGED;
+                        resp.payload_len = strlen(tmpbuf);
+                        resp.payload = (uint8_t *)malloc(resp.payload_len);
+                        if (resp.payload)
+                            memcpy(resp.payload, tmpbuf, resp.payload_len);
+                        fprintf(task->log_file, "PUT: Updated hum id=%d\n", id);
+                    }
+                    else
+                    {
+                        resp.code = COAP_CODE_NOT_FOUND;
+                        fprintf(task->log_file, "PUT: id=%d not found (hum)\n", id);
+                    }
+                }
+                else
+                {
+                    resp.code = COAP_CODE_BAD_REQUEST;
+                    fprintf(task->log_file, "PUT: hum value parse error for id=%d\n", id);
+                }
             }
             else
             {
-                resp.code = COAP_CODE_NOT_FOUND;
-                fprintf(task->log_file, "PUT: id=%d not found\n", id);
+                /* Full replace payload */
+                if (db_update(id, payload) == 0)
+                {
+                    snprintf(tmpbuf, sizeof(tmpbuf), "{\"updated\":%d}", id);
+                    resp.code = COAP_CODE_CHANGED;
+                    resp.payload_len = strlen(tmpbuf);
+                    resp.payload = (uint8_t *)malloc(resp.payload_len);
+                    if (resp.payload)
+                        memcpy(resp.payload, tmpbuf, resp.payload_len);
+                    fprintf(task->log_file, "PUT: Updated id=%d (full replace)\n", id);
+                }
+                else
+                {
+                    resp.code = COAP_CODE_NOT_FOUND;
+                    fprintf(task->log_file, "PUT: id=%d not found (full)\n", id);
+                }
             }
+
+            free(payload);
         }
         else
         {
@@ -293,15 +504,36 @@ void *handle_client(void *arg)
         break;
     }
 
-    // send response
-    uint8_t out[BUF_SIZE];
-    int len = coap_serialize(&resp, out, sizeof(out));
-    if (len > 0)
-        sendto(task->sock, (const char *)out, len, 0,
-               (struct sockaddr *)&task->client_addr, task->addr_len);
+    // send response (using dynamic buffer sized to payload to avoid truncation for GET all)
+    size_t out_size = (size_t)resp.payload_len + 512; // overhead for header/options
+    uint8_t *out = malloc(out_size);
+    if (out)
+    {
+        int len = coap_serialize(&resp, out, out_size);
+        if (len > 0)
+        {
+            sendto(task->sock, (const char *)out, len, 0,
+                   (struct sockaddr *)&task->client_addr, task->addr_len);
+        }
+        else
+        {
+            fprintf(task->log_file,
+                    "coap_serialize failed (out_size=%zu payload_len=%zu)\n",
+                    out_size, (size_t)resp.payload_len);
+        }
+        free(out);
+    }
+    else
+    {
+        fprintf(task->log_file,
+                "malloc failed for out buffer (size=%zu)\n", out_size);
+    }
 
-    fprintf(task->log_file, "Processed MID=%u Code=%u Uri=%s Response=%d\n",
-            req.message_id, req.code, uri_path ? uri_path : "(none)", resp.code);
+    fprintf(task->log_file,
+            "Processed MID=%u Code=%u Uri=%s Response=%d\n",
+            req.message_id, req.code,
+            uri_path ? uri_path : "(none)",
+            resp.code);
     fflush(task->log_file);
 
     // Free memory
@@ -338,7 +570,7 @@ int main(int argc, char *argv[])
 
     if (argc >= 2)
         port = atoi(argv[1]);
-        
+
     if (argc >= 3)
     {
         FILE *f = fopen(argv[2], "a");
