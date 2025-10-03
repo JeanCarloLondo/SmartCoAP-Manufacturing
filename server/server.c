@@ -1,6 +1,6 @@
 #include "coap.h"
 
-#include "../src/db.h"
+#include "../src/db.h"              // SQLite database helper functions
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -36,18 +36,22 @@ typedef pthread_t thread_t;
 
 #define DEFAULT_PORT 5683
 #define BUF_SIZE 8192
+
+// Task structure representing a single client request
 typedef struct
 {
-    int sock;
-    struct sockaddr_in client_addr;
+    int sock;                       // Server UDP socket
+    struct sockaddr_in client_addr; // Client address
     socklen_t addr_len;
-    uint8_t buffer[BUF_SIZE];
-    ssize_t msg_len;
-    FILE *log_file;
+    uint8_t buffer[BUF_SIZE];       // Incoming CoAP datagram
+    ssize_t msg_len;                // Length of datagram
+    FILE *log_file;                 // Pointer to log file
 } client_task_t;
 
-/* Helpers */
-
+/* ------------------------
+   Logging helper
+   ------------------------ */
+// Writes log messages with timestamp and level (INFO/ERROR).
 static void log_message(FILE *logf, const char *level, const char *fmt, ...) {
     if (!logf) return;
 
@@ -67,6 +71,10 @@ static void log_message(FILE *logf, const char *level, const char *fmt, ...) {
     fflush(logf);
 }
 
+/* ------------------------
+   Response initializer
+   ------------------------ */
+// Creates a response template based on a request: copies MID, token, and sets type.
 static void init_response_from_request(const coap_message_t *req, coap_message_t *resp)
 {
     coap_init_message(resp);
@@ -84,7 +92,10 @@ static void init_response_from_request(const coap_message_t *req, coap_message_t
         resp->type = COAP_TYPE_RST;
 }
 
-/* trim in-place, returns pointer to trimmed string (same buffer) */
+/* ------------------------
+   Utility helpers
+   ------------------------ */
+// Trim whitespace in place from both ends of a string
 static char *trim_inplace(char *s)
 {
     if (!s)
@@ -106,6 +117,7 @@ static char *trim_inplace(char *s)
 /* extract numeric token after token (like "temp" or "hum") into out (null-terminated).
    Returns 1 if something copied, 0 otherwise. Accepts colon or space separators and decimals.
 */
+// Extract a numeric value following a keyword like "temp" or "hum" from a string
 static int extract_number_after(const char *s, const char *token, char *out, size_t outsz)
 {
     if (!s || !token || !out)
@@ -146,6 +158,7 @@ static int extract_number_after(const char *s, const char *token, char *out, siz
     return 1;
 }
 
+// Extract Uri-Path options (number 11) and join them into a string like "sensor/1"
 static char *extract_uri_path(const coap_message_t *req)
 {
     if (!req || req->options_count == 0)
@@ -179,6 +192,7 @@ static char *extract_uri_path(const coap_message_t *req)
     return path;
 }
 
+// Return 1 if string is a number, 0 otherwise
 static int is_numeric(const char *s)
 {
     if (!s || *s == '\0')
@@ -194,7 +208,7 @@ static int is_numeric(const char *s)
     return 1;
 }
 
-/* Helper to check if uri_path is sensor/<num> and return sensor number, else -1 */
+// Parse URIs of form "sensor/<id>", returning the numeric id, or -1 if not valid
 static int parse_sensor_uri(const char *uri_path)
 {
     if (!uri_path)
@@ -213,7 +227,11 @@ static int parse_sensor_uri(const char *uri_path)
     return atoi(p);
 }
 
-/* Worker function - SQLite */
+/* ------------------------
+   Worker thread
+   ------------------------ */
+// Each incoming CoAP datagram spawns this handler in its own thread.
+// Parses request, executes CRUD on SQLite, builds response, and sends it back.
 #if defined(_WIN32) || defined(_WIN64)
 DWORD WINAPI handle_client(LPVOID arg)
 #else
@@ -222,6 +240,7 @@ void *handle_client(void *arg)
 {
     client_task_t *task = (client_task_t *)arg;
 
+    // Parse request
     coap_message_t req;
     memset(&req, 0, sizeof(req));
 
@@ -236,14 +255,17 @@ void *handle_client(void *arg)
 #endif
     }
 
+    // Prepare response template
     coap_message_t resp;
     init_response_from_request(&req, &resp);
 
-    char *uri_path = extract_uri_path(&req);
+    char *uri_path = extract_uri_path(&req);  // Extract Uri-Path string
     char tmpbuf[1024];
 
+    // Dispatch by request method
     switch (req.code)
     {
+    // GET: retrieve single record or all records
     case COAP_CODE_GET:
     {
         // If uri_path is numeric (id) OR sensor/<id> -> treat as id-get
@@ -299,6 +321,7 @@ void *handle_client(void *arg)
         }
         break;
     }
+    // POST: insert new record (auto-id, explicit id, or sensor-specific)
     case COAP_CODE_POST:
     {
         if (req.payload && req.payload_len > 0)
@@ -407,7 +430,7 @@ void *handle_client(void *arg)
         }
         break;
     }
-
+    // PUT: update record by id (partial update temp/hum, or full replace)
     case COAP_CODE_PUT:
     {
         int id = -1;
@@ -551,6 +574,7 @@ void *handle_client(void *arg)
         }
         break;
     }
+    // DELETE: delete record by id
     case COAP_CODE_DELETE:
     {
         int id = -1;
@@ -609,6 +633,7 @@ void *handle_client(void *arg)
         log_message(task->log_file, "ERROR", "malloc failed for out buffer (size=%zu)", out_size);
     }
 
+    // Log summary
     log_message(task->log_file, "INFO", "Processed MID=%u Code=%u Uri=%s Response=%d",
             req.message_id, req.code,
             uri_path ? uri_path : "(none)",
@@ -629,8 +654,14 @@ void *handle_client(void *arg)
 #endif
 }
 
+/* ------------------------
+   Main function
+   ------------------------ */
+// Initializes database, opens UDP socket, and enters infinite loop
+// spawning threads to handle incoming CoAP datagrams.
 int main(int argc, char *argv[])
 {
+    // Database setup
     char db_path[512];
     snprintf(db_path, sizeof(db_path), "./coap_data.db");
 
@@ -644,6 +675,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    // Port and logging setup
     int port = DEFAULT_PORT;
     FILE *logf = stdout;
 
@@ -669,6 +701,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    // Networking setup (cross-platform)
 #if defined(_WIN32) || defined(_WIN64)
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
@@ -698,6 +731,7 @@ int main(int argc, char *argv[])
 
     printf("CoAP server listening on %d...\n", port);
 
+    // Main loop: receive datagrams, spawn worker threads
     while (1)
     {
         client_task_t *task = malloc(sizeof(*task));

@@ -21,16 +21,36 @@
 #define MAX_RETRIES 4
 #define INITIAL_WAIT_MS 2000
 
-static uint16_t random_mid(void) {
+/* -------------------------------
+   Utility: generate random MID
+   ------------------------------- */
+static uint16_t random_mid(void) 
+{
     return (uint16_t)(rand() & 0xFFFF);
 }
 
+/* ----------------------------------------------------------
+   Send a CoAP message and wait for an ACK from the server.
+   - sock: UDP socket
+   - srv: server address
+   - msg: prepared CoAP message
+   - timeout_ms: how long to wait
+   Returns:
+      0 -> ACK received and valid
+      1 -> timeout (no response in time)
+     -1 -> send error
+     -2 -> received Reset (RST) message
+     -3 -> parse/unexpected response
+     -4 -> receive error
+   ---------------------------------------------------------- */
 static int send_coap_and_wait_ack(int sock, struct sockaddr_in *srv,
-                                  coap_message_t *msg, int timeout_ms) {
+                                  coap_message_t *msg, int timeout_ms) 
+{
     uint8_t out[MAX_BUF];
     int outlen = coap_serialize(msg, out, sizeof(out));
     if (outlen <= 0) return -1;
 
+    // Send packet to server
     if (sendto(sock, out, outlen, 0, (struct sockaddr*)srv, sizeof(*srv)) < 0)
         return -1;
 
@@ -44,22 +64,31 @@ static int send_coap_and_wait_ack(int sock, struct sockaddr_in *srv,
 
     int rv = select(sock + 1, &rfds, NULL, NULL, &tv);
     
-    if (rv > 0 && FD_ISSET(sock, &rfds)) {
+    if (rv > 0 && FD_ISSET(sock, &rfds)) 
+    {
+        // Response available
         uint8_t in[MAX_BUF];
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
         ssize_t r = recvfrom(sock, in, sizeof(in), 0, (struct sockaddr*)&from, &flen);
-        if (r > 0) {
+        if (r > 0) 
+        {
             coap_message_t resp;
-            if (coap_parse(in, r, &resp) == COAP_OK) {
-                if (resp.type == COAP_TYPE_ACK && resp.message_id == msg->message_id) {
+            if (coap_parse(in, r, &resp) == COAP_OK) 
+            {
+                // Check if ACK matches our message
+                if (resp.type == COAP_TYPE_ACK && resp.message_id == msg->message_id) 
+                {
                     printf("[esp32_sim] ACK MID=%u, Code=%u\n", resp.message_id, resp.code);
                     if (resp.payload_len > 0)
                         printf("[esp32_sim] Payload: %.*s\n",
                                (int)resp.payload_len, resp.payload);
                     coap_free_message(&resp);
                     return 0;
-                } else if (resp.type == COAP_TYPE_RST) {
+                } 
+                else if (resp.type == COAP_TYPE_RST) 
+                {
+                    // Server rejected/reset the message
                     printf("[esp32_sim] Received RST (reset) MID=%u\n", resp.message_id);
                     coap_free_message(&resp);
                     return -2;
@@ -68,33 +97,43 @@ static int send_coap_and_wait_ack(int sock, struct sockaddr_in *srv,
             }
             return -3; // parse or unexpected
         }
-        return -4;
+        return -4; // recv error
     }
     return 1; // timeout
 }
 
-int main(int argc, char **argv) {
+/* -------------------------------
+   Main entry: ESP32 simulator
+   ------------------------------- */
+int main(int argc, char **argv) 
+{
     srand(time(NULL) ^ getpid());
 
+     // Parse command line arguments
     const char *server_ip = argc > 1 ? argv[1] : DEFAULT_SERVER_IP;
     int server_port = argc > 2 ? atoi(argv[2]) : DEFAULT_SERVER_PORT;
     const char *uri_path = argc > 3 ? argv[3] : "sensor";
     int runs = argc > 4 ? atoi(argv[4]) : 5;
     int period_sec = argc > 5 ? atoi(argv[5]) : 2;
 
+    // Create UDP socket
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) { perror("socket"); return 1; }
 
+    // Setup server address
     struct sockaddr_in srv;
     memset(&srv,0,sizeof(srv));
     srv.sin_family = AF_INET;
     srv.sin_port = htons(server_port);
-    if (inet_pton(AF_INET, server_ip, &srv.sin_addr) != 1) {
+    if (inet_pton(AF_INET, server_ip, &srv.sin_addr) != 1) 
+    {
         fprintf(stderr, "Invalid server IP\n");
         close(sock); return 1;
     }
 
-    for (int i=0;i<runs;i++) {
+    // Main loop: send N messages
+    for (int i=0;i<runs;i++) 
+    {
         coap_message_t msg;
         coap_init_message(&msg);
         msg.version = COAP_VERSION;
@@ -115,15 +154,22 @@ int main(int argc, char **argv) {
 
         printf("[esp32_sim] Sending POST MID=%u payload=%s\n", msg.message_id, payload);
 
+        // Retransmission with exponential backoff
         int attempt = 0, wait_ms = INITIAL_WAIT_MS, rc = 1;
-        while (attempt < MAX_RETRIES) {
+        while (attempt < MAX_RETRIES) 
+        {
             rc = send_coap_and_wait_ack(sock, &srv, &msg, wait_ms);
-            if (rc == 0) break;
-            if (rc == 1) {
+            if (rc == 0) break; // success
+            if (rc == 1) 
+            {
+                // Timeout -> retransmit
                 attempt++;
                 printf("[esp32_sim] timeout, retransmit %d (wait %d ms)\n", attempt, wait_ms);
-                wait_ms *= 2;
-            } else {
+                wait_ms *= 2; // exponential backoff
+            } 
+            else 
+            {
+                // Other error
                 printf("[esp32_sim] error rc=%d\n", rc);
                 break;
             }

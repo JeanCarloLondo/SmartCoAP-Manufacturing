@@ -13,21 +13,24 @@
 
 #include "../src/coap.h"
 
+// Default server address and port
 #define DEFAULT_SERVER_IP "127.0.0.1"
 #define DEFAULT_SERVER_PORT 5683
-#define MAX_BUF 2048
-#define RECV_TIMEOUT_MS 2000
+#define MAX_BUF 2048         // Max CoAP message size
+#define RECV_TIMEOUT_MS 2000 // 2 seconds
 
+/* Generate a random CoAP message ID (MID) */
 static uint16_t random_mid(void)
 {
     return (uint16_t)(rand() & 0xFFFF);
 }
 
+/* Check if a string is purely numeric (for sensor IDs, etc.) */
 static int is_numeric(const char *s)
 {
     if (!s || *s == '\0')
         return 0;
-    if (*s == '-')
+    if (*s == '-') // allow negative numbers
         s++;
     while (*s)
     {
@@ -38,6 +41,16 @@ static int is_numeric(const char *s)
     return 1;
 }
 
+/* 
+   Send a CoAP message to the server and wait for a reply. 
+   Uses select() to wait with a timeout. 
+   Returns:
+     0 -> success
+     1 -> timeout
+    -1 -> send error
+    -3 -> parse error
+    -4 -> receive error
+*/
 static int send_coap_and_wait(int sock, struct sockaddr_in *srv,
                               coap_message_t *msg, int timeout_ms)
 {
@@ -49,6 +62,7 @@ static int send_coap_and_wait(int sock, struct sockaddr_in *srv,
     if (sendto(sock, out, outlen, 0, (struct sockaddr *)srv, sizeof(*srv)) < 0)
         return -1;
 
+    // Prepare select() for timeout
     fd_set rfds;
     struct timeval tv;
     FD_ZERO(&rfds);
@@ -59,6 +73,7 @@ static int send_coap_and_wait(int sock, struct sockaddr_in *srv,
     int rv = select(sock + 1, &rfds, NULL, NULL, &tv);
     if (rv > 0 && FD_ISSET(sock, &rfds))
     {
+        // Got response -> read it
         uint8_t in[MAX_BUF];
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
@@ -77,13 +92,14 @@ static int send_coap_and_wait(int sock, struct sockaddr_in *srv,
                 coap_free_message(&resp);
                 return 0;
             }
-            return -3;
+            return -3; // parse error
         }
-        return -4;
+        return -4; // recv error
     }
     return 1; // timeout
 }
 
+/* Print usage instructions */
 static void usage(const char *me)
 {
     printf("Usage: %s [server_ip] [server_port] [sensor_number] [message_id]\n", me);
@@ -97,15 +113,20 @@ static void usage(const char *me)
     printf("\nExamples:\n  GET 3\n  PUT 3=temperature:22.5\n  DELETE 3\n  POST {\"temp\":22}\n");
 }
 
+/* -------------------
+   Main entry point
+   ------------------- */
 int main(int argc, char **argv)
 {
     srand(time(NULL) ^ getpid());
 
+    // Parse command line arguments
     const char *server_ip = argc > 1 ? argv[1] : DEFAULT_SERVER_IP;
     int server_port = argc > 2 ? atoi(argv[2]) : DEFAULT_SERVER_PORT;
     const char *sensor_number = argc > 3 ? argv[3] : NULL;
     uint16_t fixed_mid = (argc > 4 ? (uint16_t)atoi(argv[4]) : 0);
 
+    // Create UDP socket
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0)
     {
@@ -113,6 +134,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Server address
     struct sockaddr_in srv;
     memset(&srv, 0, sizeof(srv));
     srv.sin_family = AF_INET;
@@ -133,6 +155,9 @@ int main(int argc, char **argv)
     char line[1024];
     usage(argv[0]);
 
+    /* -------------------
+       Interactive loop
+       ------------------- */
     while (1)
     {
         printf("\ncoap> ");

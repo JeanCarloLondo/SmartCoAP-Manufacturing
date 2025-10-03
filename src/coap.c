@@ -13,27 +13,29 @@
 // ==========================
 // Initialization
 // ==========================
+// Initialize a CoAP message structure with default values
 void coap_init_message(coap_message_t *msg)
 {
     if (!msg)
         return;
-    msg->version = COAP_VERSION;
-    msg->type = COAP_TYPE_CON;
-    msg->tkl = 0;
-    msg->code = COAP_METHOD_EMPTY;
-    msg->message_id = 0;
+    msg->version = COAP_VERSION;  // CoAP protocol version (always 1)
+    msg->type = COAP_TYPE_CON;    // Default type: Confirmable
+    msg->tkl = 0;                 // Token length (0 = no token)
+    msg->code = COAP_METHOD_EMPTY; // Default code is 0.00 (empty)
+    msg->message_id = 0;          // Message ID to be set later
     memset(msg->token, 0, sizeof msg->token);
 
-    msg->options = NULL;
+    msg->options = NULL;         // No options initially
     msg->options_count = 0;
 
-    msg->payload = NULL;
+    msg->payload = NULL;         // No payload initially
     msg->payload_len = 0;
 }
 
 // ==========================
 // Serialization
 // ==========================
+// Convert a CoAP message structure into a byte buffer (wire format)
 int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_len)
 {
     if (!msg || !out_buf)
@@ -41,23 +43,25 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
     if (msg->tkl > COAP_MAX_TOKEN_LEN)
         return COAP_ERR_TKL_TOO_LARGE;
 
-    // estimated space
+    // Estimate required buffer size
     size_t needed = 4 + msg->tkl;
     for (size_t i = 0; i < msg->options_count; i++)
     {
-        needed += 1 + msg->options[i].length;
+        needed += 1 + msg->options[i].length;  
     }
     if (msg->payload_len)
     {
-        needed += 1 + msg->payload_len;
+        needed += 1 + msg->payload_len;  // add marker + payload
     }
     if (out_buf_len < needed)
         return COAP_ERR_TRUNCATED;
 
-    // first byte
+    // First byte: version, type, token length
     uint8_t first = ((msg->version & 0x03) << 6) |
                     (((uint8_t)msg->type & 0x03) << 4) |
                     (msg->tkl & 0x0F);
+
+    // Fill header
 
     // second byte is code
     out_buf[0] = first;
@@ -77,7 +81,7 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
         idx += msg->tkl;
     }
 
-    // options
+    // Serialize options (delta encoding simplified: only small deltas allowed)
     uint16_t running_delta = 0;
     for (size_t i = 0; i < msg->options_count; i++)
     {
@@ -96,10 +100,10 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
         idx += opt->length;
     }
 
-    // payload
+    // Payload (if present)
     if (msg->payload_len)
     {
-        out_buf[idx++] = COAP_PAYLOAD_MARKER;
+        out_buf[idx++] = COAP_PAYLOAD_MARKER; // 0xFF marker
         memcpy(out_buf + idx, msg->payload, msg->payload_len);
         idx += msg->payload_len;
     }
@@ -109,6 +113,7 @@ int coap_serialize(const coap_message_t *msg, uint8_t *out_buf, size_t out_buf_l
 // ==========================
 // Parsing
 // ==========================
+// Parse a raw byte buffer into a CoAP message structure
 int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
 {
     if (!buf || !msg)
@@ -127,7 +132,7 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
     uint16_t mid_net = ((uint16_t)buf[idx++] << 8);
     mid_net |= (uint16_t)buf[idx++];
 
-    // initialization
+    // Fill message fields
     msg->version = version;
     msg->type = (coap_type_t)(type & 0x03);
     msg->tkl = tkl;
@@ -142,7 +147,7 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
     if (version != COAP_VERSION)
         return COAP_ERR_VERSION_MISMATCH;
 
-    // token
+    // Token
     if (tkl > COAP_MAX_TOKEN_LEN)
         return COAP_ERR_TKL_TOO_LARGE;
     if (idx + tkl > buf_len)
@@ -151,12 +156,13 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
         memcpy(msg->token, buf + idx, tkl);
     idx += tkl;
 
-    // options and payload
+    // Parse options and payload
     uint16_t running_delta = 0;
     while (idx < buf_len)
     {
         if (buf[idx] == COAP_PAYLOAD_MARKER)
         {
+            // Payload starts after marker
             idx++;
             if (idx >= buf_len)
                 return COAP_ERR_TRUNCATED;
@@ -168,6 +174,7 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
             return COAP_OK;
         }
 
+        // Option header
         uint8_t byte = buf[idx++];
         uint8_t opt_delta = (byte >> 4) & 0x0F;
         uint8_t opt_len = (byte & 0x0F);
@@ -182,7 +189,7 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
         uint16_t opt_num = running_delta + opt_delta;
         running_delta = opt_num;
 
-        // reallocate space for new option
+        // Add new option to the message (expand array)
         coap_option_t *tmp = realloc(msg->options, (msg->options_count + 1) * sizeof(coap_option_t));
         if (!tmp)
             return COAP_ERR_INVALID;
@@ -204,12 +211,13 @@ int coap_parse(const uint8_t *buf, size_t buf_len, coap_message_t *msg)
 // ==========================
 // Free resources
 // ==========================
+// Free dynamically allocated memory in a CoAP message (options, payload)
 void coap_free_message(coap_message_t *msg)
 {
     if (!msg)
         return;
 
-    // free options
+    // Free options
     if (msg->options)
     {
         for (size_t i = 0; i < msg->options_count; i++)
@@ -225,7 +233,7 @@ void coap_free_message(coap_message_t *msg)
         msg->options_count = 0;
     }
 
-    // free payload
+    // Free payload
     if (msg->payload)
     {
         free(msg->payload);
@@ -237,6 +245,7 @@ void coap_free_message(coap_message_t *msg)
 // ==========================
 // Build empty ACK
 // ==========================
+// Create an empty ACK message in response to a Confirmable request
 void coap_build_empty_ack(const coap_message_t *req, coap_message_t *ack)
 {
     coap_init_message(ack);
@@ -248,6 +257,7 @@ void coap_build_empty_ack(const coap_message_t *req, coap_message_t *ack)
 // ==========================
 // Build RST
 // ==========================
+// Create a Reset (RST) message in response to an invalid or unexpected message
 void coap_build_rst_for(const coap_message_t *req, coap_message_t *rst)
 {
     coap_init_message(rst);
@@ -256,16 +266,20 @@ void coap_build_rst_for(const coap_message_t *req, coap_message_t *rst)
     rst->message_id = req->message_id;
 }
 
+// ==========================
+// Add option
+// ==========================
+// Insert a new option into the CoAP message, keeping options sorted by number
 int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, size_t length)
 {
     if (!msg)
         return COAP_ERR_INVALID;
     if (!value && length > 0)
         return COAP_ERR_INVALID;
-    if (length > 15)
+    if (length > 15)  // this implementation supports only small options
         return COAP_ERR_OPTION_OVERSIZE;
 
-    // find insertion point to keep options ordered by number
+    // Find insertion point to keep options sorted by number
     size_t idx = 0;
     for (; idx < msg->options_count; ++idx)
     {
@@ -273,19 +287,19 @@ int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, 
             break;
     }
 
-    // realloc options array to hold one more
+    // Reallocate memory for one more option
     coap_option_t *tmp = (coap_option_t *)realloc(msg->options, (msg->options_count + 1) * sizeof(coap_option_t));
     if (!tmp)
         return COAP_ERR_INVALID;
     msg->options = tmp;
 
-    // shift elements right from the end to idx
+    // Shift existing options to make space
     for (size_t j = msg->options_count; j > idx; --j)
     {
         msg->options[j] = msg->options[j - 1];
     }
 
-    // initialize new slot
+    // Initialize new option slot
     msg->options[idx].number = number;
     msg->options[idx].length = (uint16_t)length;
     msg->options[idx].value = NULL;
@@ -295,7 +309,7 @@ int coap_add_option(coap_message_t *msg, uint16_t number, const uint8_t *value, 
         msg->options[idx].value = (uint8_t *)malloc(length);
         if (!msg->options[idx].value)
         {
-            // rollback: shift back and shrink array
+            // Rollback if malloc fails
             for (size_t j = idx; j < msg->options_count; ++j)
                 msg->options[j] = msg->options[j + 1];
             // reduce size

@@ -7,8 +7,14 @@
 #include <math.h>
 #include <strings.h>
 
-static sqlite3 *db = NULL;
+static sqlite3 *db = NULL; // Global SQLite connection handle
 
+/* -------------------------
+   Database initialization
+   ------------------------- */
+// Opens (or creates) the SQLite database file.
+// Also creates a table `data` if it does not exist yet.
+// Columns: id (autoincrement), sensor id, value text, timestamp (default = current localtime).
 int db_init(const char *filename)
 {
     if (sqlite3_open(filename, &db) != SQLITE_OK)
@@ -33,6 +39,11 @@ int db_init(const char *filename)
     return 0;
 }
 
+/* -------------------------
+   Insert functions
+   ------------------------- */
+
+// Insert a record with only `value`. ID is auto-assigned.
 int db_insert(const char *value)
 {
     const char *sql = "INSERT INTO data (value) VALUES (?);";
@@ -51,6 +62,7 @@ int db_insert(const char *value)
     return (int)sqlite3_last_insert_rowid(db); // autoincrement
 }
 
+// Insert with explicit ID (useful for PUT/POST with client-specified id)
 int db_insert_with_id(int id, const char *value)
 {
     const char *sql = "INSERT INTO data (id, value) VALUES (?, ?);";
@@ -71,6 +83,7 @@ int db_insert_with_id(int id, const char *value)
 }
 
 /* Insert including sensor id */
+// Insert with a specific sensor id (maps one record to a sensor)
 int db_insert_with_sensor(int sensor, const char *value)
 {
     const char *sql = "INSERT INTO data (sensor, value) VALUES (?, ?);";
@@ -90,7 +103,12 @@ int db_insert_with_sensor(int sensor, const char *value)
     return (int)sqlite3_last_insert_rowid(db);
 }
 
-/* Return full JSON list */
+/* -------------------------
+   Read functions
+   ------------------------- */
+
+// Return last 26 rows as a JSON array string.
+// Rows are reversed to show oldest first.
 char *db_get_all(void)
 {
     // Get last 26 entries ordered by id desc (newest first)
@@ -102,6 +120,7 @@ char *db_get_all(void)
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
         return NULL;
 
+    // Prepare buffer
     size_t cap = 2048, len = 0;
     char *out = malloc(cap);
     if (!out)
@@ -120,6 +139,7 @@ char *db_get_all(void)
     row_t rows[26];
     int count = 0;
 
+    // Read results (newest first)
     while (sqlite3_step(stmt) == SQLITE_ROW && count < 26)
     {
         rows[count].id = sqlite3_column_int(stmt, 0);
@@ -176,7 +196,7 @@ char *db_get_raw_by_id(int id)
     return out;
 }
 
-/* Return JSON object for a specific id (kept similar) */
+/* Return JSON object for a specific id {"id":x, "value":..., "ts":...} */
 char *db_get_by_id(int id)
 {
     const char *sql = "SELECT value,timestamp FROM data WHERE id=?;";
@@ -198,6 +218,11 @@ char *db_get_by_id(int id)
     return out;
 }
 
+/* -------------------------
+   Update & Delete functions
+   ------------------------- */
+
+// Update value for an id
 int db_update(int id, const char *value)
 {
     const char *sql = "UPDATE data SET value=? WHERE id=?;";
@@ -211,6 +236,7 @@ int db_update(int id, const char *value)
     return (rc == SQLITE_DONE && sqlite3_changes(db) > 0) ? 0 : -1;
 }
 
+// Delete record by id
 int db_delete(int id)
 {
     const char *sql = "DELETE FROM data WHERE id=?;";
@@ -236,6 +262,7 @@ static void parse_temp_hum(const char *s, double *out_temp, double *out_hum)
 
     if (!s)
         return;
+    // Look for "temp":<number>
     p = strstr(s, "temp");
     if (p)
     {
